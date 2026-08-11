@@ -19,7 +19,7 @@ import pytest
 from one_world import schema
 from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
-from one_world.scenario import BEINGS, SCENARIO, apply_step
+from one_world.scenario import BEINGS, SCENARIO, apply_step, seed_world
 from one_world.world import WorldStore
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,8 +39,7 @@ def build(tmp_path, steps):
     mc = schema.open_minds(os.path.join(tmp_path, "minds.db"))
     schema.init_minds(mc)
     world = WorldStore(wc)
-    for being_id, name, nature in BEINGS:
-        world.add_being(being_id, name, nature)
+    seed_world(world)
     for step in steps:
         apply_step(world, step)
     PerceptionRouter(world, mc).derive_pending()
@@ -275,6 +274,8 @@ def test_committing_without_a_pose_fails_closed(tmp_path):
     for being_id, name, nature in BEINGS:
         world.add_being(being_id, name, nature)
     world.set_pose("warren", 0, 0, 1, 0)  # ava and noah have no pose
-    with pytest.raises(KeyError):
-        world.commit_event(**SCENARIO[0]["event"])
+    # SCENARIO[1] is the SPEECH step, the one that still goes through
+    # commit_event directly; GIVE and STOW now require the action layer.
+    with pytest.raises(KeyError, match="has no pose"):
+        world.commit_event(**SCENARIO[1]["event"])
     assert world.event_count() == 0, "partial event survived a failed commit"

@@ -155,7 +155,7 @@ def test_event_marked_done_only_after_its_perceptions_are_durable(tmp_path):
     connection, i.e. durably committed rather than merely staged.
     """
     from one_world.perception import PerceptionRouter
-    from one_world.scenario import BEINGS, SCENARIO, apply_step
+    from one_world.scenario import BEINGS, SCENARIO, apply_step, seed_world
     from one_world.world import WorldStore
 
     wc = schema.open_world(os.path.join(tmp_path, "world.db"))
@@ -163,8 +163,7 @@ def test_event_marked_done_only_after_its_perceptions_are_durable(tmp_path):
     mc = schema.open_minds(os.path.join(tmp_path, "minds.db"))
     schema.init_minds(mc)
     world = WorldStore(wc)
-    for being_id, name, nature in BEINGS:
-        world.add_being(being_id, name, nature)
+    seed_world(world)
     for step in SCENARIO:
         apply_step(world, step)
 
@@ -206,7 +205,7 @@ def test_derivation_order_follows_world_seq_not_outbox_row_order(tmp_path):
     are a SUBSEQUENCE of canonical order -- gaps allowed, inversions never.
     """
     from one_world.perception import PerceptionRouter
-    from one_world.scenario import BEINGS, SCENARIO, apply_step
+    from one_world.scenario import BEINGS, SCENARIO, apply_step, seed_world
     from one_world.world import WorldStore
 
     wc = schema.open_world(os.path.join(tmp_path, "world.db"))
@@ -214,8 +213,7 @@ def test_derivation_order_follows_world_seq_not_outbox_row_order(tmp_path):
     mc = schema.open_minds(os.path.join(tmp_path, "minds.db"))
     schema.init_minds(mc)
     world = WorldStore(wc)
-    for being_id, name, nature in BEINGS:
-        world.add_being(being_id, name, nature)
+    seed_world(world)
 
     ids = [apply_step(world, step) for step in SCENARIO]  # all PENDING
     assert len(world.pending_projections()) == len(ids)

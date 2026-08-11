@@ -7,9 +7,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from typing import Any
 
 from one_world.sensing import sense_event
+
+
+#: Kinds that change canonical world state. These may only be created through
+#: the validated action layer (one_world.actions), never by a direct call to
+#: commit_event -- otherwise the action layer would be a well-behaved caller
+#: alongside an open back door, rather than the only way in.
+STATE_CHANGING_KINDS = frozenset({"GIVE", "STOW"})
 
 
 def _dumps(obj: Any) -> str:
@@ -95,6 +103,57 @@ class WorldStore:
             )
         ]
 
+    # -- canonical objects ----------------------------------------------
+
+    def add_object(self, object_id: str, kind: str, description: str,
+                   holder_id: str) -> None:
+        """Introduce an object and give it an initial holder."""
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO object (object_id, kind, description) VALUES (?, ?, ?)",
+                (object_id, kind, description),
+            )
+            self._conn.execute(
+                "INSERT INTO object_location (object_id, holder_id, stowed_in) "
+                "VALUES (?, ?, NULL)",
+                (object_id, holder_id),
+            )
+
+    def object_row(self, object_id: str):
+        """Canonical identity, or None if no such object exists."""
+        return self._conn.execute(
+            "SELECT object_id, kind, description FROM object WHERE object_id = ?",
+            (object_id,),
+        ).fetchone()
+
+    def object_location(self, object_id: str):
+        """Current holder and stow label, or None if the object is unknown."""
+        return self._conn.execute(
+            "SELECT object_id, holder_id, stowed_in FROM object_location "
+            "WHERE object_id = ?",
+            (object_id,),
+        ).fetchone()
+
+    def being_exists(self, being_id: str) -> bool:
+        return self._conn.execute(
+            "SELECT 1 FROM being WHERE being_id = ?", (being_id,)
+        ).fetchone() is not None
+
+    def _set_object_location(self, object_id: str, holder_id: str,
+                             stowed_in: str | None) -> None:
+        """Caller MUST hold the action transaction."""
+        self._conn.execute(
+            "UPDATE object_location SET holder_id = ?, stowed_in = ? "
+            "WHERE object_id = ?",
+            (holder_id, stowed_in, object_id),
+        )
+
+    @contextmanager
+    def transaction(self):
+        """One canonical transaction: state change AND history, or neither."""
+        with self._conn:
+            yield
+
     # -- commit ---------------------------------------------------------
 
     def commit_event(
@@ -121,65 +180,98 @@ class WorldStore:
         the grades stored here are a function of where everyone WAS and which
         walls STOOD at the time, and neither later movement nor later
         demolition can reach back and change them.
+
+        REFUSES state-changing kinds. A GIVE or a STOW asserts that the world
+        actually changed, and only the action layer may establish that.
         """
+        if kind in STATE_CHANGING_KINDS:
+            raise ValueError(
+                f"{kind!r} changes canonical world state and cannot be appended "
+                f"directly; use one_world.actions"
+            )
         with self._conn:
-            seq = self._next_world_seq()
-            event_id = f"evt-{seq:06d}"  # deterministic; no UUID anywhere
+            return self._append_event_locked(
+                kind=kind, location=location, actor_id=actor_id, payload=payload,
+                presence=presence, event_x_cm=event_x_cm, event_y_cm=event_y_cm,
+                occurred_at=occurred_at, audio_mode=audio_mode,
+            )
+
+    def _append_event_locked(
+        self,
+        *,
+        kind: str,
+        location: str,
+        actor_id: str,
+        payload: dict,
+        presence: list[str],
+        event_x_cm: int,
+        event_y_cm: int,
+        occurred_at: str,
+        audio_mode: str | None = None,
+    ) -> str:
+        """Append the event and everything derived from it.
+
+        The caller MUST already hold the transaction, so that a state change and
+        its historical event commit together or not at all. No kind guard here:
+        this is the internal primitive the action layer builds on.
+        """
+        seq = self._next_world_seq()
+        event_id = f"evt-{seq:06d}"  # deterministic; no UUID anywhere
+        self._conn.execute(
+            "INSERT INTO world_event "
+            "(event_id, world_seq, kind, location, actor_id, payload_json, "
+            "event_x_cm, event_y_cm, audio_mode, occurred_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (event_id, seq, kind, location, actor_id, _dumps(payload),
+             event_x_cm, event_y_cm, audio_mode, occurred_at),
+        )
+
+        poses: dict[str, tuple[int, int, int, int]] = {}
+        for being_id in sorted(presence):
             self._conn.execute(
-                "INSERT INTO world_event "
-                "(event_id, world_seq, kind, location, actor_id, payload_json, "
-                "event_x_cm, event_y_cm, audio_mode, occurred_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (event_id, seq, kind, location, actor_id, _dumps(payload),
-                 event_x_cm, event_y_cm, audio_mode, occurred_at),
+                "INSERT INTO world_presence (event_id, being_id) VALUES (?, ?)",
+                (event_id, being_id),
             )
-
-            poses: dict[str, tuple[int, int, int, int]] = {}
-            for being_id in sorted(presence):
-                self._conn.execute(
-                    "INSERT INTO world_presence (event_id, being_id) VALUES (?, ?)",
-                    (event_id, being_id),
-                )
-                pose = self.current_pose(being_id)  # fails closed if absent
-                poses[being_id] = pose
-                self._conn.execute(
-                    "INSERT INTO world_pose "
-                    "(event_id, being_id, x_cm, y_cm, facing_x, facing_y) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (event_id, being_id, *pose),
-                )
-
-            walls = []
-            for wall_id, x1, y1, x2, y2 in self.current_walls():
-                walls.append((x1, y1, x2, y2))
-                self._conn.execute(
-                    "INSERT INTO world_wall "
-                    "(event_id, wall_id, x1_cm, y1_cm, x2_cm, y2_cm) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (event_id, wall_id, x1, y1, x2, y2),
-                )
-
-            observations = sense_event(
-                kind=kind,
-                actor_id=actor_id,
-                event_x_cm=event_x_cm,
-                event_y_cm=event_y_cm,
-                audio_mode=audio_mode,
-                poses=poses,
-                walls=tuple(walls),
-            )
-            for being_id, grade in sorted(observations.items()):
-                self._conn.execute(
-                    "INSERT INTO world_observation (event_id, being_id, grade) "
-                    "VALUES (?, ?, ?)",
-                    (event_id, being_id, grade),
-                )
-
+            pose = self.current_pose(being_id)  # fails closed if absent
+            poses[being_id] = pose
             self._conn.execute(
-                "INSERT INTO projection_outbox (event_id, world_seq, state) "
-                "VALUES (?, ?, 'PENDING')",
-                (event_id, seq),
+                "INSERT INTO world_pose "
+                "(event_id, being_id, x_cm, y_cm, facing_x, facing_y) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, being_id, *pose),
             )
+
+        walls = []
+        for wall_id, x1, y1, x2, y2 in self.current_walls():
+            walls.append((x1, y1, x2, y2))
+            self._conn.execute(
+                "INSERT INTO world_wall "
+                "(event_id, wall_id, x1_cm, y1_cm, x2_cm, y2_cm) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (event_id, wall_id, x1, y1, x2, y2),
+            )
+
+        observations = sense_event(
+            kind=kind,
+            actor_id=actor_id,
+            event_x_cm=event_x_cm,
+            event_y_cm=event_y_cm,
+            audio_mode=audio_mode,
+            poses=poses,
+            walls=tuple(walls),
+        )
+        for being_id, grade in sorted(observations.items()):
+            self._conn.execute(
+                "INSERT INTO world_observation (event_id, being_id, grade) "
+                "VALUES (?, ?, ?)",
+                (event_id, being_id, grade),
+            )
+
+        self._conn.execute(
+            "INSERT INTO projection_outbox (event_id, world_seq, state) "
+            "VALUES (?, ?, 'PENDING')",
+            (event_id, seq),
+        )
         return event_id
 
     # -- projection bookkeeping -----------------------------------------

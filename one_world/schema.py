@@ -31,6 +31,36 @@ CREATE TABLE IF NOT EXISTS being_pose (
     CHECK (facing_x != 0 OR facing_y != 0)
 );
 
+-- Canonical object identity. `description` is the world's own detail, e.g.
+-- "red lighter"; it is NOT what any character necessarily perceives.
+CREATE TABLE IF NOT EXISTS object (
+    object_id    TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL,
+    description  TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS object_no_update
+BEFORE UPDATE ON object
+BEGIN SELECT RAISE(ABORT, 'object identity is immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS object_no_delete
+BEFORE DELETE ON object
+BEGIN SELECT RAISE(ABORT, 'object identity is append-only'); END;
+
+-- MUTABLE present-day possession. Exactly one row per object, so "held by two
+-- beings at once" is not a state this schema can express -- the contradiction
+-- is prevented structurally rather than checked for.
+--
+-- v0.4 narrowing: every object is always held by someone. There is no
+-- free-standing "on the floor" state, because the milestone does not need one.
+-- `stowed_in` is a label for having put the object away on your person; the
+-- holder does not change when you stow something.
+CREATE TABLE IF NOT EXISTS object_location (
+    object_id  TEXT PRIMARY KEY REFERENCES object(object_id),
+    holder_id  TEXT NOT NULL REFERENCES being(being_id),
+    stowed_in  TEXT
+);
+
 -- MUTABLE present-day world structure. Walls are visual information barriers,
 -- not realistic physical objects: no thickness, material, doors or windows.
 -- Zero-length walls are rejected rather than given invented semantics.

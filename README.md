@@ -171,6 +171,49 @@ canonical present-day state *without themselves being events*. Nobody perceives
 movement or construction; there is no history of who built what or who saw them
 build it. v0.3 tests historical perception, not yet perception of change.
 
+## v0.4: actions — events must correspond to real state changes
+
+Through v0.3 an event could assert almost anything. Nothing required that a red
+lighter existed, that Warren held it, or that possession actually moved. History
+was persistent and perceptually bounded, but not causally grounded.
+
+**The action layer.** A caller proposes; the world engine decides.
+
+```
+propose_give(world, actor="warren", receiver="ava", object_id="lighter-1", ...)
+  -> ActionResult(accepted=True, event_id="evt-000000")
+  -> ActionResult(accepted=False, reason="NOT_POSSESSED")
+```
+
+`commit_event` now **refuses** `GIVE` and `STOW`. Those kinds assert that the
+world changed, and only a validated action may establish that. The action layer
+is the only way in, not a well-behaved caller beside an open door. `SPEECH`
+changes no state and still goes through `commit_event`.
+
+The payload is **generated from canonical state**, not supplied. A proposal
+names `object_id`; the engine writes the object's own `description`. A caller
+cannot describe an outcome into existence, which is the authority boundary a
+language model would eventually sit outside of.
+
+**Object model.** One row per object in `object_location`, so "held by two
+beings at once" is not a state the schema can express. Possession moves on
+GIVE; STOW sets a `stowed_in` label without changing the holder.
+
+**Atomicity.** Validation, the state change, the event, the pose and wall
+snapshots, sensing, the observations and the outbox row all commit in one
+`world.db` transaction. A rejected proposal leaves nothing: no state change, no
+event, no consumed sequence number, no snapshot, no observation, no outbox row,
+and therefore no perception. A rejected proposal did not happen.
+
+**History does not follow current state.** The payload is materialised at commit
+into the immutable event. Giving the lighter onwards afterwards never rewrites
+what the earlier event says.
+
+**Accepted v0.4 limitations.** Every object is always held by someone — there is
+no free-standing "on the floor" state, and no containers as first-class objects.
+Retrieving something you stowed is not an event. There is no authorization model:
+validation asks whether an action is *possible*, never whether it is *permitted*.
+
 ## Accepted v0.1 limitation: an unprojectable event wedges the queue
 
 Projection fails closed. If `project()` raises for a committed event — an

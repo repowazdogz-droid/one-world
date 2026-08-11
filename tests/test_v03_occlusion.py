@@ -22,7 +22,7 @@ from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
 from one_world.scenario import (
     BEINGS, BLOCKING_WALL, NOAH_CLEAR_OF_WALL, WALL_EVENT, WALL_ID,
-    WALL_SCENE_POSES, setup_wall_scene, wall_event,
+    WALL_SCENE_POSES, seed_world, setup_wall_scene, wall_event,
 )
 from one_world.sensing import sense_event
 from one_world.world import WorldStore
@@ -44,8 +44,7 @@ def build(tmp_path, *, with_wall, noah_pose=None):
     mc = schema.open_minds(os.path.join(tmp_path, "minds.db"))
     schema.init_minds(mc)
     world = WorldStore(wc)
-    for being_id, name, nature in BEINGS:
-        world.add_being(being_id, name, nature)
+    seed_world(world)
     setup_wall_scene(world, with_wall=with_wall, noah_pose=noah_pose)
     event_id = wall_event(world, WALL_EVENT["occurred_at"])
     PerceptionRouter(world, mc).derive_pending()

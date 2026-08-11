@@ -22,6 +22,7 @@ import os
 import sys
 
 from one_world import schema
+from one_world.actions import propose_give, propose_stow
 from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
 from one_world.world import WorldStore
@@ -33,6 +34,10 @@ BEINGS = [
 ]
 
 ROOM = "the_back_room"
+
+#: The one canonical object. `description` is the world's own detail; it is not
+#: what any character necessarily perceives.
+LIGHTER = ("lighter-1", "lighter", "red lighter")
 ALL_THREE = ["warren", "ava", "noah"]
 
 # Scene, in integer centimetres. Facing is an integer direction vector.
@@ -56,14 +61,16 @@ SCENARIO = [
             "ava": (100, 0, -1, 0),
             "noah": (50, 800, 0, -1),
         },
-        "event": {
-            "kind": "GIVE",
-            "location": ROOM,
-            "actor_id": "warren",
-            "payload": {"giver": "warren", "receiver": "ava", "object": "red lighter"},
+        # Proposal, not an assertion. The engine checks Warren really holds
+        # lighter-1, moves it, and generates the payload from canonical state.
+        # The event position is derived as the midpoint of the two poses: (50,0).
+        "action": {
+            "verb": "GIVE",
+            "actor": "warren",
+            "receiver": "ava",
+            "object_id": "lighter-1",
             "presence": ALL_THREE,
-            "event_x_cm": 50,
-            "event_y_cm": 0,
+            "location": ROOM,
             "occurred_at": "0001-01-01T00:00:00Z",
         },
     },
@@ -100,14 +107,15 @@ SCENARIO = [
             "ava": (100, 0, -1, 0),
             "noah": (50, 800, 0, 1),
         },
-        "event": {
-            "kind": "STOW",
-            "location": ROOM,
-            "actor_id": "ava",
-            "payload": {"actor": "ava", "object": "red lighter", "place": "jacket pocket"},
+        # Ava can only stow it because the GIVE actually transferred it.
+        # The event happens at her own position: (100,0).
+        "action": {
+            "verb": "STOW",
+            "actor": "ava",
+            "object_id": "lighter-1",
+            "place": "jacket pocket",
             "presence": ALL_THREE,
-            "event_x_cm": 100,
-            "event_y_cm": 0,
+            "location": ROOM,
             "occurred_at": "0001-01-01T00:02:00Z",
         },
     },
@@ -144,16 +152,24 @@ WALL_SCENE_POSES = {
 #: (200,200) -> (0,0) passes x=100 at y=100, clear of the wall's y range.
 NOAH_CLEAR_OF_WALL = (200, 200, -1, -1)
 
+#: Descriptive record of the v0.3 wall event. `event_x_cm/event_y_cm` are the
+#: DERIVED position (Warren's own pose) and are kept here so the v0.3 sensing
+#: control tests can reason about the same geometry.
 WALL_EVENT = {
     "kind": "STOW",
-    "location": ROOM,
     "actor_id": "warren",
-    "payload": {"actor": "warren", "object": "red lighter", "place": "the table"},
-    "presence": ALL_THREE,
     "event_x_cm": 0,
     "event_y_cm": 0,
     "occurred_at": "0002-01-01T00:00:00Z",
 }
+
+
+def wall_action(occurred_at: str) -> dict:
+    return {
+        "verb": "STOW", "actor": "warren", "object_id": "lighter-1",
+        "place": "the table", "presence": ALL_THREE, "location": ROOM,
+        "occurred_at": occurred_at,
+    }
 
 
 def setup_wall_scene(world: WorldStore, *, with_wall: bool, noah_pose=None) -> None:
@@ -170,9 +186,8 @@ def setup_wall_scene(world: WorldStore, *, with_wall: bool, noah_pose=None) -> N
 
 
 def wall_event(world: WorldStore, occurred_at: str) -> str:
-    spec = dict(WALL_EVENT)
-    spec["occurred_at"] = occurred_at
-    return world.commit_event(**spec)
+    """The v0.3 scene's event, now a validated action."""
+    return run_action(world, wall_action(occurred_at))
 
 
 def world_path(d: str) -> str:
@@ -184,14 +199,35 @@ def minds_path(d: str) -> str:
 
 
 def apply_step(world: WorldStore, step: dict) -> str:
-    """Put everyone where the step says they are, then commit the event.
+    """Put everyone where the step says they are, then run the step.
 
-    Poses are physical facts and are legitimate authored input. Grades are not
-    authored anywhere -- commit_event derives them.
+    Poses are physical facts and are legitimate authored input. Grades are
+    derived, and for state-changing verbs the payload and event position are
+    derived too -- the step only proposes.
     """
     for being_id, pose in sorted(step["poses"].items()):
         world.set_pose(being_id, *pose)
+    if "action" in step:
+        return run_action(world, step["action"])
     return world.commit_event(**step["event"])
+
+
+def run_action(world: WorldStore, spec: dict) -> str:
+    """Dispatch a proposal and insist it was accepted."""
+    spec = dict(spec)
+    verb = spec.pop("verb")
+    fn = {"GIVE": propose_give, "STOW": propose_stow}[verb]
+    result = fn(world, **spec)
+    if not result.accepted:
+        raise AssertionError(f"scenario action {verb} rejected: {result.reason}")
+    return result.event_id
+
+
+def seed_world(world: WorldStore, holder: str = "warren") -> None:
+    """Beings and the one object, with an explicit initial holder."""
+    for being_id, name, nature in BEINGS:
+        world.add_being(being_id, name, nature)
+    world.add_object(*LIGHTER, holder_id=holder)
 
 
 def _open_both(d: str):
@@ -205,8 +241,7 @@ def _open_both(d: str):
 def populate(d: str, crash_before_derive: int | None) -> None:
     world_conn, minds_conn = _open_both(d)
     world = WorldStore(world_conn)
-    for being_id, name, nature in BEINGS:
-        world.add_being(being_id, name, nature)
+    seed_world(world)
 
     router = PerceptionRouter(world, minds_conn)
     for index, step in enumerate(SCENARIO):
@@ -229,8 +264,7 @@ def wall_populate(d: str, with_wall: bool, crash_before_derive: int | None) -> N
     """The v0.3 acceptance scene: one event, wall present or absent."""
     world_conn, minds_conn = _open_both(d)
     world = WorldStore(world_conn)
-    for being_id, name, nature in BEINGS:
-        world.add_being(being_id, name, nature)
+    seed_world(world)
     setup_wall_scene(world, with_wall=with_wall)
     wall_event(world, WALL_EVENT["occurred_at"])
     if crash_before_derive is not None:
@@ -253,6 +287,9 @@ def new_wall_event(d: str, occurred_at: str) -> None:
     """Commit a further equivalent event under TODAY's geometry."""
     world_conn, minds_conn = _open_both(d)
     world = WorldStore(world_conn)
+    # A second stow needs the object un-stowed first; the engine would reject
+    # otherwise. Retrieving is not an event in v0.4.
+    world._set_object_location("lighter-1", "warren", None)
     wall_event(world, occurred_at)
     PerceptionRouter(world, minds_conn).derive_pending()
 
