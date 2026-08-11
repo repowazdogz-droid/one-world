@@ -214,6 +214,59 @@ no free-standing "on the floor" state, and no containers as first-class objects.
 Retrieving something you stowed is not an event. There is no authorization model:
 validation asks whether an action is *possible*, never whether it is *permitted*.
 
+## v0.5: refusal — an inhabitant can say no
+
+Through v0.4 the world asked only whether an action was *possible*. If Warren
+held the lighter, `propose_give` moved it; Ava had no say. v0.5 puts a decision
+in that gap.
+
+```
+attempt_give(world, actor="warren", receiver="ava", object_id="lighter-1")
+  -> ActionResult(accepted=True, attempt_id="att-000000", outcome="PENDING")
+
+respond_to_attempt(world, attempt_id="att-000000", responder="ava",
+                   response="REFUSE")
+  -> ActionResult(accepted=True, outcome="REFUSED")
+```
+
+**Refusal is part of reality.** On REFUSE the object does not move and no GIVE
+event exists, but the GIVE_ATTEMPT and REFUSAL events do. "Warren tried to give
+Ava the lighter" and "Warren gave Ava the lighter" are different truths and the
+system never collapses one into the other.
+
+**An unresolved offer is world state, not workflow.** A PENDING `give_attempt`
+row survives a hard restart; a separate process can read the offer off disk and
+answer it.
+
+**The outcome is persisted, never re-derived.** `give_attempt.outcome` records
+what happened at resolution. Nothing works out whether an offer succeeded by
+looking at who holds the object today — which matters, because after a refusal,
+an acceptance and a hand-back, current ownership matches the *refused* state.
+
+**Impossible is not refused.** A causally invalid offer produces no event and no
+attempt: it never reached anyone to be refused. Refusal exists only downstream
+of a valid attempt.
+
+**The response is supplied by the caller, and that is deliberate.** A perception
+grade is a physical fact the world should derive; a decision is an inhabitant's
+own act. The canonical fact recorded is only "Ava refused this attempt" — never
+a reason. Unknown response verbs fail closed rather than being interpreted.
+
+**Refusal is not optional.** There is no direct-transfer API. `_transfer_holder`
+is the only primitive that writes `holder_id`, and it refuses to run without a
+live attempt naming that object and that receiver, so possession cannot move
+without an ACCEPT however the caller comes at it. `_set_stow` does not mention
+`holder_id` at all. Initial seeding via `add_object` establishes a first holder
+and is not a transfer.
+
+**Accepted v0.5 limitations.** This is recipient agency for GIVE, not a general
+authorization system: it establishes no rights, no ownership law, no coercion
+resistance, and no consent for any other action class. There is no counter-offer,
+no negotiation, no timeout or expiry for a PENDING offer, and no way to withdraw
+one. Invalid responses leave no trace at all, so nobody can perceive a failed
+attempt to answer. Refusal carries no reason and no model infers one. Raw SQL
+remains outside the API boundary.
+
 ## Accepted v0.1 limitation: an unprojectable event wedges the queue
 
 Projection fails closed. If `project()` raises for a committed event — an

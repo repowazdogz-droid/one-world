@@ -83,34 +83,35 @@ def test_scenario_grades_are_derived_from_geometry(tmp_path):
     world, _ = build(tmp_path, SCENARIO)
     got = {e["event_id"]: e["observations"] for e in world.all_events()}
     assert got == {
+        # The offer, then the transfer Ava accepted. Same poses for both:
         # Ava 50 cm away and looking at it; Noah 800 cm away, in cone, past the
         # 300 cm detail threshold; Warren is the actor.
         "evt-000000": {"ava": "CLEAR", "noah": "COARSE", "warren": "CLEAR"},
+        "evt-000001": {"ava": "CLEAR", "noah": "COARSE", "warren": "CLEAR"},
         # DIRECTED speech carries 150 cm. Ava is 100 cm away, Noah ~802 cm.
-        "evt-000001": {"ava": "CLEAR", "warren": "CLEAR"},
+        "evt-000002": {"ava": "CLEAR", "warren": "CLEAR"},
         # Both onlookers have turned away; Ava perceives it as the actor.
-        "evt-000002": {"ava": "CLEAR"},
+        "evt-000003": {"ava": "CLEAR"},
     }
 
 
 def test_warren_misses_the_stow_because_of_facing_not_distance(tmp_path):
     """He is 100 cm away -- well inside detail range -- and still sees nothing."""
     world, history = build(tmp_path, SCENARIO)
-    stow = world.load_event("evt-000002")
+    stow = world.load_event("evt-000003")
     wx, wy, fx, fy = stow["poses"]["warren"]
     assert (wx, wy) == (0, 0) and (fx, fy) == (-1, 0)
     assert abs(stow["event_x_cm"] - wx) == 100  # inside DETAIL_RANGE_CM of 300
     assert "warren" not in stow["observations"]
-    assert len(history.recall("warren")) == 2
+    assert len(history.recall("warren")) == 3
 
 
-def test_noah_receives_a_coarse_give_and_nothing_else(tmp_path):
+def test_noah_receives_only_coarse_visuals_and_nothing_else(tmp_path):
     _, history = build(tmp_path, SCENARIO)
     noah = history.recall("noah")
-    assert len(noah) == 1
-    assert noah[0]["kind"] == "GIVE"
-    assert noah[0]["grade"] == "COARSE"
-    assert noah[0]["content"]["object"] == "something"
+    assert [m["kind"] for m in noah] == ["GIVE_ATTEMPT", "GIVE"]
+    assert all(m["grade"] == "COARSE" for m in noah)
+    assert [m["content"]["object"] for m in noah] == ["something", "something"]
 
 
 # -- counterfactuals: one variable, causally -----------------------------
@@ -144,7 +145,7 @@ def test_counterfactual_turning_noah_away_removes_the_memory(tmp_path):
 
     _, a = build(tmp_path / "watching", [watching])
     _, b = build(tmp_path / "turned", [turned])
-    assert len(a.recall("noah")) == 1
+    assert len(a.recall("noah")) == 2      # the offer and the transfer
     assert b.recall("noah") == []
 
 
@@ -210,9 +211,9 @@ def test_crash_then_move_then_recover_preserves_event_time_perception(tmp_path):
     assert r.returncode == 0, r.stderr
 
     noah = json.loads(run_phase(tmp_path, "recall").stdout)["noah"]
-    assert len(noah) == 1
-    assert noah[0]["grade"] == "COARSE", "recovery used present-day position"
-    assert noah[0]["content"]["object"] == "something"
+    assert len(noah) == 2
+    assert all(m["grade"] == "COARSE" for m in noah), "recovery used present-day position"
+    assert all(m["content"]["object"] == "something" for m in noah)
 
     blob = json.dumps(noah).lower()
     assert "lighter" not in blob and "red" not in blob

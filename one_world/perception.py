@@ -40,6 +40,20 @@ def _speech_clear(p: dict) -> dict:
     }
 
 
+def _attempt_clear(p: dict) -> dict:
+    return {"giver": p["giver"], "receiver": p["receiver"], "object": p["object"]}
+
+
+def _attempt_coarse(p: dict) -> dict:
+    # Seen from too far to tell what is being offered. The identity is
+    # destroyed here, not hidden: "Warren tried to give Ava something".
+    return {"giver": p["giver"], "receiver": p["receiver"], "object": "something"}
+
+
+def _refusal_clear(p: dict) -> dict:
+    return {"refuser": p["refuser"], "utterance": p["utterance"]}
+
+
 def _stow_clear(p: dict) -> dict:
     return {"actor": p["actor"], "object": p["object"], "place": p["place"]}
 
@@ -49,6 +63,9 @@ _PROJECTIONS: dict[tuple[str, str], Callable[[dict], dict]] = {
     ("GIVE", "COARSE"): _give_coarse,
     ("SPEECH", "CLEAR"): _speech_clear,
     ("STOW", "CLEAR"): _stow_clear,
+    ("GIVE_ATTEMPT", "CLEAR"): _attempt_clear,
+    ("GIVE_ATTEMPT", "COARSE"): _attempt_coarse,
+    ("REFUSAL", "CLEAR"): _refusal_clear,
 }
 
 

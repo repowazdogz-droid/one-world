@@ -61,6 +61,28 @@ CREATE TABLE IF NOT EXISTS object_location (
     stowed_in  TEXT
 );
 
+-- An offer that has reached its recipient and is awaiting their answer.
+--
+-- This is MUTABLE canonical state, deliberately: `outcome` moves PENDING ->
+-- ACCEPTED/REFUSED exactly once, like projection_outbox rather than like the
+-- append-only history. A PENDING row IS the unresolved interaction, so an
+-- attempt survives a restart as world state rather than as in-memory workflow.
+--
+-- `outcome` and `resolved_seq` are the persisted HISTORICAL FACT of what
+-- happened. Nothing anywhere re-derives whether an attempt succeeded by looking
+-- at who holds the object today.
+CREATE TABLE IF NOT EXISTS give_attempt (
+    attempt_id    TEXT PRIMARY KEY,
+    world_seq     INTEGER NOT NULL UNIQUE,   -- seq of its GIVE_ATTEMPT event
+    actor_id      TEXT NOT NULL REFERENCES being(being_id),
+    receiver_id   TEXT NOT NULL REFERENCES being(being_id),
+    object_id     TEXT NOT NULL REFERENCES object(object_id),
+    outcome       TEXT NOT NULL
+                  CHECK (outcome IN ('PENDING', 'ACCEPTED', 'REFUSED')),
+    resolved_seq  INTEGER,                   -- seq of the GIVE or REFUSAL event
+    CHECK ((outcome = 'PENDING') = (resolved_seq IS NULL))
+);
+
 -- MUTABLE present-day world structure. Walls are visual information barriers,
 -- not realistic physical objects: no thickness, material, doors or windows.
 -- Zero-length walls are rejected rather than given invented semantics.

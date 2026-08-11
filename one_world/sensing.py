@@ -22,8 +22,10 @@ AUDIO = "AUDIO"
 #: visibility for everyone.
 MODALITY = {
     "GIVE": VISUAL,
+    "GIVE_ATTEMPT": VISUAL,   # you can watch someone offer something
     "STOW": VISUAL,
     "SPEECH": AUDIO,
+    "REFUSAL": AUDIO,         # saying no out loud; heard, not seen
 }
 
 #: Beyond this, an event is not seen at all.

@@ -17,7 +17,7 @@ from one_world.sensing import sense_event
 #: the validated action layer (one_world.actions), never by a direct call to
 #: commit_event -- otherwise the action layer would be a well-behaved caller
 #: alongside an open back door, rather than the only way in.
-STATE_CHANGING_KINDS = frozenset({"GIVE", "STOW"})
+STATE_CHANGING_KINDS = frozenset({"GIVE", "GIVE_ATTEMPT", "STOW", "REFUSAL"})
 
 
 def _dumps(obj: Any) -> str:
@@ -139,14 +139,81 @@ class WorldStore:
             "SELECT 1 FROM being WHERE being_id = ?", (being_id,)
         ).fetchone() is not None
 
-    def _set_object_location(self, object_id: str, holder_id: str,
-                             stowed_in: str | None) -> None:
+    def _set_stow(self, object_id: str, stowed_in: str | None) -> None:
+        """Change only the stow label. Caller MUST hold the action transaction.
+
+        holder_id is not in this statement at all, so this primitive cannot
+        move an object between inhabitants however it is called.
+        """
+        self._conn.execute(
+            "UPDATE object_location SET stowed_in = ? WHERE object_id = ?",
+            (stowed_in, object_id),
+        )
+
+    def _transfer_holder(self, object_id: str, to_holder: str,
+                         attempt_id: str) -> None:
+        """Move an object between inhabitants. Caller MUST hold the transaction.
+
+        The ONLY primitive that can change holder_id, and it structurally
+        requires a live attempt naming this object and this receiver. There is
+        therefore no way to transfer possession without an offer that the
+        receiver is in the act of answering -- recipient agency is not a
+        convention the caller may skip.
+        """
+        live = self._conn.execute(
+            "SELECT 1 FROM give_attempt WHERE attempt_id = ? AND outcome = 'PENDING' "
+            "AND object_id = ? AND receiver_id = ?",
+            (attempt_id, object_id, to_holder),
+        ).fetchone()
+        if live is None:
+            raise ValueError(
+                f"possession cannot change: no pending attempt {attempt_id!r} "
+                f"offers {object_id!r} to {to_holder!r}"
+            )
+        self._conn.execute(
+            "UPDATE object_location SET holder_id = ?, stowed_in = NULL "
+            "WHERE object_id = ?",
+            (to_holder, object_id),
+        )
+
+    # -- offers awaiting an answer --------------------------------------
+
+    def _create_attempt(self, attempt_id: str, world_seq: int, actor_id: str,
+                        receiver_id: str, object_id: str) -> None:
         """Caller MUST hold the action transaction."""
         self._conn.execute(
-            "UPDATE object_location SET holder_id = ?, stowed_in = ? "
-            "WHERE object_id = ?",
-            (holder_id, stowed_in, object_id),
+            "INSERT INTO give_attempt (attempt_id, world_seq, actor_id, "
+            "receiver_id, object_id, outcome, resolved_seq) "
+            "VALUES (?, ?, ?, ?, ?, 'PENDING', NULL)",
+            (attempt_id, world_seq, actor_id, receiver_id, object_id),
         )
+
+    def _resolve_attempt(self, attempt_id: str, outcome: str,
+                         resolved_seq: int) -> None:
+        """Caller MUST hold the action transaction. Records the OUTCOME FACT."""
+        self._conn.execute(
+            "UPDATE give_attempt SET outcome = ?, resolved_seq = ? "
+            "WHERE attempt_id = ? AND outcome = 'PENDING'",
+            (outcome, resolved_seq, attempt_id),
+        )
+
+    def attempt(self, attempt_id: str):
+        return self._conn.execute(
+            "SELECT * FROM give_attempt WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone()
+
+    def pending_attempts(self) -> list:
+        """Unresolved offers, in canonical order. Survives restart."""
+        return list(self._conn.execute(
+            "SELECT * FROM give_attempt WHERE outcome = 'PENDING' "
+            "ORDER BY world_seq"))
+
+    def attempt_for_event_seq(self, world_seq: int):
+        """The attempt an event belongs to -- explicit, never by adjacency."""
+        return self._conn.execute(
+            "SELECT * FROM give_attempt WHERE world_seq = ? OR resolved_seq = ?",
+            (world_seq, world_seq),
+        ).fetchone()
 
     @contextmanager
     def transaction(self):

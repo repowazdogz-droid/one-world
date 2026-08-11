@@ -19,7 +19,7 @@ import pytest
 from one_world import actions, schema
 from one_world.actions import (
     ALREADY_STOWED, NOT_POSSESSED, SELF_GIVE, UNKNOWN_ACTOR, UNKNOWN_OBJECT,
-    UNKNOWN_RECEIVER, propose_give, propose_stow,
+    UNKNOWN_RECEIVER, attempt_give, propose_stow, respond_to_attempt,
 )
 from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
@@ -55,10 +55,26 @@ def fresh(tmp_path, holder="warren"):
     return world, wc, mc
 
 
-def give(world, **kw):
+def offer(world, **kw):
+    """Just the attempt. Possession does not move."""
     base = dict(actor="warren", receiver="ava", object_id="lighter-1",
                 presence=ALL_THREE, location=ROOM, occurred_at="0001-01-01T00:00:00Z")
-    return propose_give(world, **{**base, **kw})
+    return attempt_give(world, **{**base, **kw})
+
+
+def give(world, **kw):
+    """A completed transfer: offer, then the named receiver accepts.
+
+    v0.5 removed the direct-transfer API, so this is the only shape a
+    successful A->B move can take.
+    """
+    receiver = kw.get("receiver", "ava")
+    made = offer(world, **kw)
+    if not made.accepted:
+        return made
+    return respond_to_attempt(
+        world, attempt_id=made.attempt_id, responder=receiver, response="ACCEPT",
+        presence=ALL_THREE, location=ROOM, occurred_at="0001-01-01T00:00:01Z")
 
 
 def stow(world, **kw):
@@ -92,8 +108,11 @@ def test_commit_event_refuses_state_changing_kinds(tmp_path):
     assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 0
 
 
-def test_state_changing_kinds_are_exactly_give_and_stow():
-    assert STATE_CHANGING_KINDS == frozenset({"GIVE", "STOW"})
+def test_state_changing_kinds_are_exactly_the_guarded_set():
+    """v0.5 added two: GIVE_ATTEMPT creates a pending offer, REFUSAL resolves
+    one, so both change canonical state and both must be unforgeable."""
+    assert STATE_CHANGING_KINDS == frozenset(
+        {"GIVE", "GIVE_ATTEMPT", "STOW", "REFUSAL"})
 
 
 def test_no_production_module_calls_the_locked_appender_except_actions():
@@ -108,31 +127,42 @@ def test_no_production_module_calls_the_locked_appender_except_actions():
 
 def test_caller_cannot_supply_the_object_description(tmp_path):
     """A proposal names an object_id; the payload comes from canonical state."""
-    params = set(inspect.signature(propose_give).parameters)
+    params = set(inspect.signature(attempt_give).parameters)
     assert "object_id" in params
     assert "payload" not in params and "description" not in params and "object" not in params
 
     world, wc, _ = fresh(tmp_path)
     assert give(world).accepted
-    payload = json.loads(
-        wc.execute("SELECT payload_json FROM world_event").fetchone()[0])
-    assert payload["object"] == "red lighter"      # canonical description
-    assert "lighter-1" not in json.dumps(payload)  # not the internal id
+    payloads = [json.loads(r[0]) for r in wc.execute(
+        "SELECT payload_json FROM world_event ORDER BY world_seq")]
+    assert len(payloads) == 2                       # the offer and the transfer
+    for payload in payloads:
+        assert payload["object"] == "red lighter"   # canonical description
+        assert "lighter-1" not in json.dumps(payload)  # not the internal id
 
 
 # -- accepted actions ----------------------------------------------------
 
 
-def test_give_transfers_possession_and_writes_one_event(tmp_path):
+def test_give_transfers_possession_only_after_the_receiver_accepts(tmp_path):
     world, wc, _ = fresh(tmp_path)
     assert world.object_location("lighter-1")["holder_id"] == "warren"
 
-    result = give(world)
-    assert result.accepted and result.event_id == "evt-000000"
+    made = offer(world)
+    assert made.accepted and made.event_id == "evt-000000"
+    assert world.object_location("lighter-1")["holder_id"] == "warren", (
+        "possession moved on the offer alone")
+
+    result = respond_to_attempt(
+        world, attempt_id=made.attempt_id, responder="ava", response="ACCEPT",
+        presence=ALL_THREE, location=ROOM, occurred_at="t")
+    assert result.accepted and result.event_id == "evt-000001"
 
     assert world.object_location("lighter-1")["holder_id"] == "ava"
-    assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 1
-    row = wc.execute("SELECT kind, event_x_cm, event_y_cm FROM world_event").fetchone()
+    assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 2
+    row = wc.execute(
+        "SELECT kind, event_x_cm, event_y_cm FROM world_event WHERE world_seq=1"
+    ).fetchone()
     assert row["kind"] == "GIVE"
     # Position DERIVED as the midpoint of (0,0) and (100,0).
     assert (row["event_x_cm"], row["event_y_cm"]) == (50, 0)
@@ -149,8 +179,7 @@ def test_stow_sets_the_place_without_changing_the_holder(tmp_path):
 def test_give_clears_a_previous_stow(tmp_path):
     world, _, _ = fresh(tmp_path, holder="ava")
     assert stow(world).accepted
-    assert propose_give(world, actor="ava", receiver="warren", object_id="lighter-1",
-                        presence=ALL_THREE, location=ROOM, occurred_at="t").accepted
+    assert give(world, actor="ava", receiver="warren").accepted
     loc = world.object_location("lighter-1")
     assert loc["holder_id"] == "warren" and loc["stowed_in"] is None
 
@@ -171,27 +200,27 @@ def test_an_object_cannot_be_held_by_two_beings(tmp_path):
     "describe,call,expected_reason",
     [
         ("noah gives what ava holds",
-         lambda w: propose_give(w, actor="noah", receiver="warren",
+         lambda w: attempt_give(w, actor="noah", receiver="warren",
                                 object_id="lighter-1", presence=ALL_THREE,
                                 location=ROOM, occurred_at="t"), NOT_POSSESSED),
         ("warren gives it twice",
-         lambda w: propose_give(w, actor="warren", receiver="noah",
+         lambda w: attempt_give(w, actor="warren", receiver="noah",
                                 object_id="lighter-1", presence=ALL_THREE,
                                 location=ROOM, occurred_at="t"), NOT_POSSESSED),
         ("nonexistent object",
-         lambda w: propose_give(w, actor="ava", receiver="noah",
+         lambda w: attempt_give(w, actor="ava", receiver="noah",
                                 object_id="ghost-9", presence=ALL_THREE,
                                 location=ROOM, occurred_at="t"), UNKNOWN_OBJECT),
         ("nonexistent receiver",
-         lambda w: propose_give(w, actor="ava", receiver="nobody",
+         lambda w: attempt_give(w, actor="ava", receiver="nobody",
                                 object_id="lighter-1", presence=ALL_THREE,
                                 location=ROOM, occurred_at="t"), UNKNOWN_RECEIVER),
         ("nonexistent actor",
-         lambda w: propose_give(w, actor="nobody", receiver="ava",
+         lambda w: attempt_give(w, actor="nobody", receiver="ava",
                                 object_id="lighter-1", presence=ALL_THREE,
                                 location=ROOM, occurred_at="t"), UNKNOWN_ACTOR),
         ("giving to yourself",
-         lambda w: propose_give(w, actor="ava", receiver="ava",
+         lambda w: attempt_give(w, actor="ava", receiver="ava",
                                 object_id="lighter-1", presence=ALL_THREE,
                                 location=ROOM, occurred_at="t"), SELF_GIVE),
         ("stowing what you do not hold",
@@ -241,7 +270,7 @@ def test_rejections_do_not_consume_world_seq(tmp_path):
     """A rejected proposal must not leave a gap in canonical history."""
     world, wc, _ = fresh(tmp_path)
     for _ in range(5):
-        assert not propose_give(world, actor="noah", receiver="ava",
+        assert not attempt_give(world, actor="noah", receiver="ava",
                                 object_id="lighter-1", presence=ALL_THREE,
                                 location=ROOM, occurred_at="t").accepted
     assert give(world).accepted
@@ -260,6 +289,10 @@ def test_failure_inside_the_transaction_rolls_back_state_and_history(tmp_path, m
     job, some of that survives.
     """
     world, wc, mc = fresh(tmp_path)
+    made = offer(world)                      # the offer succeeds normally
+    assert made.accepted
+    # Snapshot AFTER the offer, so the injection is measured against the
+    # transaction that actually moves possession -- the ACCEPT.
     before = canonical_snapshot(wc)
     assert before["object_location"] == [("lighter-1", "warren", None)]
 
@@ -270,23 +303,30 @@ def test_failure_inside_the_transaction_rolls_back_state_and_history(tmp_path, m
 
     monkeypatch.setattr(world_module, "sense_event", boom)
     with pytest.raises(RuntimeError, match="exploded"):
-        give(world)
+        respond_to_attempt(
+            world, attempt_id=made.attempt_id, responder="ava", response="ACCEPT",
+            presence=ALL_THREE, location=ROOM, occurred_at="t")
 
     after = canonical_snapshot(wc)
     assert after == before, "partial work survived a failed action"
     assert world.object_location("lighter-1")["holder_id"] == "warren"
+    assert world.attempt(made.attempt_id)["outcome"] == "PENDING"
     assert mc.execute("SELECT COUNT(*) FROM perception").fetchone()[0] == 0
 
 
 def test_the_injection_would_otherwise_have_written(tmp_path):
-    """Control: without the injection the same call writes everything."""
+    """Control: without the injection the same ACCEPT writes everything."""
     world, wc, _ = fresh(tmp_path)
-    assert give(world).accepted
+    made = offer(world)
+    before = canonical_snapshot(wc)
+    assert respond_to_attempt(
+        world, attempt_id=made.attempt_id, responder="ava", response="ACCEPT",
+        presence=ALL_THREE, location=ROOM, occurred_at="t").accepted
     snap = canonical_snapshot(wc)
-    assert len(snap["world_event"]) == 1
-    assert len(snap["world_pose"]) == 3
-    assert len(snap["world_observation"]) == 3
-    assert len(snap["projection_outbox"]) == 1
+    assert len(snap["world_event"]) == len(before["world_event"]) + 1
+    assert len(snap["world_pose"]) == len(before["world_pose"]) + 3
+    assert len(snap["world_observation"]) == len(before["world_observation"]) + 3
+    assert len(snap["projection_outbox"]) == len(before["projection_outbox"]) + 1
     assert snap["object_location"] == [("lighter-1", "ava", None)]
 
 
@@ -298,17 +338,15 @@ def test_earlier_event_meaning_survives_later_transfers(tmp_path):
     world, wc, _ = fresh(tmp_path)
     assert give(world).accepted                                   # warren -> ava
     first = json.loads(
-        wc.execute("SELECT payload_json FROM world_event WHERE world_seq=0").fetchone()[0])
+        wc.execute("SELECT payload_json FROM world_event WHERE world_seq=1").fetchone()[0])
     assert first == {"giver": "warren", "object": "red lighter", "receiver": "ava"}
 
-    assert propose_give(world, actor="ava", receiver="warren", object_id="lighter-1",
-                        presence=ALL_THREE, location=ROOM, occurred_at="t2").accepted
-    assert propose_give(world, actor="warren", receiver="noah", object_id="lighter-1",
-                        presence=ALL_THREE, location=ROOM, occurred_at="t3").accepted
+    assert give(world, actor="ava", receiver="warren").accepted
+    assert give(world, actor="warren", receiver="noah").accepted
     assert world.object_location("lighter-1")["holder_id"] == "noah"
 
     again = json.loads(
-        wc.execute("SELECT payload_json FROM world_event WHERE world_seq=0").fetchone()[0])
+        wc.execute("SELECT payload_json FROM world_event WHERE world_seq=1").fetchone()[0])
     assert again == first, "current ownership rewrote an old event"
 
 
@@ -331,10 +369,14 @@ def test_full_scenario_state_and_histories(tmp_path):
     loc = world.object_location("lighter-1")
     assert loc["holder_id"] == "ava" and loc["stowed_in"] == "jacket pocket"
 
+    # v0.5: the transfer now requires an offer Ava accepts, so the GIVE is
+    # preceded by a GIVE_ATTEMPT that everyone present can also perceive.
+    assert [e["kind"] for e in world.all_events()] == [
+        "GIVE_ATTEMPT", "GIVE", "SPEECH", "STOW"]
     history = CharacterHistory(mc)
-    assert len(history.recall("ava")) == 3
-    assert len(history.recall("warren")) == 2
-    assert len(history.recall("noah")) == 1
+    assert len(history.recall("ava")) == 4
+    assert len(history.recall("warren")) == 3
+    assert len(history.recall("noah")) == 2
 
 
 def test_state_and_histories_survive_restart(tmp_path):
@@ -345,13 +387,16 @@ def test_state_and_histories_survive_restart(tmp_path):
     assert (loc["holder_id"], loc["stowed_in"]) == ("ava", "jacket pocket")
     seqs = [r[0] for r in conn.execute(
         "SELECT world_seq FROM world_event ORDER BY world_seq")]
-    assert seqs == [0, 1, 2]
+    assert seqs == [0, 1, 2, 3]
+    assert conn.execute(
+        "SELECT outcome FROM give_attempt").fetchone()[0] == "ACCEPTED"
 
     data = json.loads(run_phase(tmp_path, "recall").stdout)
-    assert len(data["ava"]) == 3
-    assert len(data["warren"]) == 2
-    assert len(data["noah"]) == 1
-    assert data["noah"][0]["content"]["object"] == "something"
+    assert len(data["ava"]) == 4
+    assert len(data["warren"]) == 3
+    assert len(data["noah"]) == 2
+    # Noah saw both the offer and the transfer, neither in enough detail.
+    assert [m["content"]["object"] for m in data["noah"]] == ["something", "something"]
 
 
 # -- information boundary ------------------------------------------------

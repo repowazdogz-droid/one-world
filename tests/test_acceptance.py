@@ -63,7 +63,7 @@ def test_no_in_memory_state_survives(restarted):
     """Recall came from a separate process, so it can only be from disk."""
     tmp, data = restarted
     assert os.path.exists(os.path.join(tmp, "minds.db"))
-    assert len(data["ava"]) == 3 and len(data["noah"]) == 1
+    assert len(data["ava"]) == 4 and len(data["noah"]) == 2
 
 
 # -- raw persisted bytes -------------------------------------------------
@@ -140,9 +140,9 @@ def test_order_survives_physical_row_reshuffle(restarted, tmp_path):
 
 def test_seq_is_per_character_and_dense(restarted):
     tmp, data = restarted
-    assert [m["seq"] for m in data["ava"]] == [0, 1, 2]
-    assert [m["seq"] for m in data["warren"]] == [0, 1]
-    assert [m["seq"] for m in data["noah"]] == [0]
+    assert [m["seq"] for m in data["ava"]] == [0, 1, 2, 3]
+    assert [m["seq"] for m in data["warren"]] == [0, 1, 2]
+    assert [m["seq"] for m in data["noah"]] == [0, 1]
 
 
 # -- canonical immutability ----------------------------------------------
@@ -202,8 +202,8 @@ def test_canonical_holds_more_than_anyone_perceived(restarted):
     tmp, data = restarted
     conn = schema.open_world(os.path.join(tmp, "world.db"))
     world = WorldStore(conn)
-    assert world.event_count() == 3
-    assert max(len(v) for v in data.values()) <= 3
+    assert world.event_count() == 4
+    assert max(len(v) for v in data.values()) <= 4
     assert len(data["warren"]) < world.event_count()
 
 
@@ -212,7 +212,7 @@ def test_world_seq_is_dense_and_ordered(restarted):
     conn = schema.open_world(os.path.join(tmp, "world.db"))
     seqs = [r["world_seq"] for r in conn.execute(
         "SELECT world_seq FROM world_event ORDER BY world_seq")]
-    assert seqs == [0, 1, 2]
+    assert seqs == [0, 1, 2, 3]
 
 
 # -- projection fails closed ---------------------------------------------

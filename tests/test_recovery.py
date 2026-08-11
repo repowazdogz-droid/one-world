@@ -51,17 +51,18 @@ def test_crash_before_derive_then_recover(tmp_path, crash_at):
     p = run_phase(tmp_path, "populate", "--crash-before-derive", str(crash_at))
     assert p.returncode == 9, f"expected hard exit, got {p.returncode}: {p.stderr}"
 
-    # The canonical event is committed and marked PENDING; nothing derived yet.
+    # The step's events are committed and marked PENDING; nothing derived yet.
+    # A GIVE step now produces TWO events (offer, then transfer), so the
+    # pending set is read from the outbox rather than assumed from the index.
     states = outbox(tmp_path)
-    crashed_id = f"evt-{crash_at:06d}"
-    assert states[crashed_id] == "PENDING"
-    assert all(v == "DONE" for k, v in states.items() if k != crashed_id)
+    pending = {k for k, v in states.items() if v == "PENDING"}
+    assert pending, "the crashed step committed no event"
     before = perception_rows(tmp_path)
-    assert all(r[2] != crashed_id for r in before), "crash left perceptions behind"
+    assert all(r[2] not in pending for r in before), "crash left perceptions behind"
 
     r = run_phase(tmp_path, "recover")
     assert r.returncode == 0, r.stderr
-    assert outbox(tmp_path)[crashed_id] == "DONE"
+    assert all(v == "DONE" for v in outbox(tmp_path).values())
 
     after = perception_rows(tmp_path)
     assert len(after) > len(before)
@@ -73,7 +74,7 @@ def test_full_history_restored_after_crash_on_last_event(tmp_path):
     assert p.returncode == 9
 
     partial = json.loads(run_phase(tmp_path, "recall").stdout)
-    assert len(partial["ava"]) == 2, "pre-recovery history should be short"
+    assert len(partial["ava"]) == 3, "pre-recovery history should be short"
 
     rec = json.loads(run_phase(tmp_path, "recover").stdout)
     assert rec["derived"] == 1  # Ava alone perceived the STOW
@@ -87,8 +88,9 @@ def test_recovered_perception_keeps_dense_ordering(tmp_path):
     run_phase(tmp_path, "populate", "--crash-before-derive", "2")
     run_phase(tmp_path, "recover")
     data = json.loads(run_phase(tmp_path, "recall").stdout)
-    assert [m["seq"] for m in data["ava"]] == [0, 1, 2]
-    assert [m["kind"] for m in data["ava"]] == ["GIVE", "SPEECH", "STOW"]
+    assert [m["seq"] for m in data["ava"]] == [0, 1, 2, 3]
+    assert [m["kind"] for m in data["ava"]] == [
+        "GIVE_ATTEMPT", "GIVE", "SPEECH", "STOW"]
 
 
 # -- idempotency: crash AFTER the write, BEFORE the DONE mark ------------
@@ -129,8 +131,9 @@ def test_each_intended_perception_exists_exactly_once(tmp_path):
     rows = perception_rows(tmp_path)
     pairs = [(r[0], r[2]) for r in rows]
     assert len(pairs) == len(set(pairs)), "duplicate (character, event) perception"
-    # Ava 3 (GIVE, SPEECH, STOW) + Warren 2 (GIVE, SPEECH) + Noah 1 (GIVE)
-    assert len(rows) == 6
+    # Ava 4 + Warren 3 + Noah 2. The offer is perceived exactly as the
+    # transfer is: same poses, same geometry.
+    assert len(rows) == 9
 
 
 def test_crash_at_first_event_loses_uncommitted_later_events(tmp_path):
@@ -138,10 +141,11 @@ def test_crash_at_first_event_loses_uncommitted_later_events(tmp_path):
     run_phase(tmp_path, "populate", "--crash-before-derive", "0")
     run_phase(tmp_path, "recover")
     conn = schema.open_world(os.path.join(tmp_path, "world.db"))
-    assert conn.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 1
+    # Step 0 is the offer AND the transfer Ava accepted: two events.
+    assert conn.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 2
     rows = perception_rows(tmp_path)
-    assert len(rows) == 3  # the GIVE, perceived by all three
-    assert {r[2] for r in rows} == {"evt-000000"}
+    assert len(rows) == 6  # both events, each perceived by all three
+    assert {r[2] for r in rows} == {"evt-000000", "evt-000001"}
 
 
 def test_event_marked_done_only_after_its_perceptions_are_durable(tmp_path):
@@ -183,7 +187,7 @@ def test_event_marked_done_only_after_its_perceptions_are_durable(tmp_path):
     world.mark_projected = spy
     PerceptionRouter(world, mc).derive_pending()
 
-    assert len(seen) == len(SCENARIO), "not every event was marked"
+    assert len(seen) == world.event_count() == 4, "not every event was marked"
     for event_id, durable, expected in seen:
         assert durable == expected, (
             f"{event_id} marked DONE with {durable}/{expected} perceptions durable"
@@ -215,8 +219,10 @@ def test_derivation_order_follows_world_seq_not_outbox_row_order(tmp_path):
     world = WorldStore(wc)
     seed_world(world)
 
-    ids = [apply_step(world, step) for step in SCENARIO]  # all PENDING
-    assert len(world.pending_projections()) == len(ids)
+    for step in SCENARIO:                      # all PENDING, none derived
+        apply_step(world, step)
+    committed = [r["event_id"] for r in world.pending_projections()]
+    assert len(committed) == 4                 # offer, transfer, speech, stow
 
     rows = [dict(r) for r in wc.execute("SELECT * FROM projection_outbox")]
     with wc:
@@ -227,7 +233,7 @@ def test_derivation_order_follows_world_seq_not_outbox_row_order(tmp_path):
                 (r["event_id"], r["world_seq"], r["state"]),
             )
     physical = [r[0] for r in wc.execute("SELECT event_id FROM projection_outbox ORDER BY rowid")]
-    assert physical == list(reversed(ids)), "setup failed to invert physical row order"
+    assert physical == list(reversed(committed)), "setup failed to invert physical row order"
 
     PerceptionRouter(world, mc).derive_pending()
 
@@ -241,7 +247,7 @@ def test_derivation_order_follows_world_seq_not_outbox_row_order(tmp_path):
             )
         ]
         assert got, f"{character} perceived nothing"
-        assert got == [i for i in ids if i in got], (
+        assert got == [i for i in committed if i in got], (
             f"{character} perception order inverted vs canonical: {got}"
         )
 

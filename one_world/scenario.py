@@ -22,7 +22,9 @@ import os
 import sys
 
 from one_world import schema
-from one_world.actions import propose_give, propose_stow
+from one_world.actions import (
+    ACCEPT, attempt_give, propose_stow, respond_to_attempt,
+)
 from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
 from one_world.world import WorldStore
@@ -190,6 +192,37 @@ def wall_event(world: WorldStore, occurred_at: str) -> str:
     return run_action(world, wall_action(occurred_at))
 
 
+# ---------------------------------------------------------------------------
+# v0.5 scene: Warren OFFERS the lighter; Ava answers. Same geometry as v0.1, so
+# the perception outcomes are the already-established ones -- Ava close enough
+# for detail, Noah 8 m away and able to see only that something changed hands.
+# ---------------------------------------------------------------------------
+
+SOCIAL_POSES = {
+    "warren": (0, 0, 1, 0),
+    "ava": (100, 0, -1, 0),
+    "noah": (50, 800, 0, -1),
+}
+
+
+def setup_social_scene(world: WorldStore) -> None:
+    for being_id, pose in sorted(SOCIAL_POSES.items()):
+        world.set_pose(being_id, *pose)
+
+
+def social_offer(world: WorldStore, occurred_at: str = "0003-01-01T00:00:00Z"):
+    return attempt_give(world, actor="warren", receiver="ava",
+                        object_id="lighter-1", presence=ALL_THREE,
+                        location=ROOM, occurred_at=occurred_at)
+
+
+def social_answer(world: WorldStore, attempt_id: str, response: str,
+                  occurred_at: str = "0003-01-01T00:01:00Z"):
+    return respond_to_attempt(world, attempt_id=attempt_id, responder="ava",
+                              response=response, presence=ALL_THREE,
+                              location=ROOM, occurred_at=occurred_at)
+
+
 def world_path(d: str) -> str:
     return os.path.join(d, "world.db")
 
@@ -213,14 +246,33 @@ def apply_step(world: WorldStore, step: dict) -> str:
 
 
 def run_action(world: WorldStore, spec: dict) -> str:
-    """Dispatch a proposal and insist it was accepted."""
+    """Dispatch a proposal and insist it was accepted.
+
+    A GIVE is no longer a single call. Possession can only move through an
+    offer the receiver answers, so "Warren gives Ava the lighter" is Warren
+    offering it and Ava taking it -- two real events, not a convenience.
+    """
     spec = dict(spec)
     verb = spec.pop("verb")
-    fn = {"GIVE": propose_give, "STOW": propose_stow}[verb]
-    result = fn(world, **spec)
-    if not result.accepted:
-        raise AssertionError(f"scenario action {verb} rejected: {result.reason}")
-    return result.event_id
+    if verb == "STOW":
+        result = propose_stow(world, **spec)
+        if not result.accepted:
+            raise AssertionError(f"scenario STOW rejected: {result.reason}")
+        return result.event_id
+    if verb != "GIVE":
+        raise ValueError(f"unknown scenario verb {verb!r}")
+
+    offer = attempt_give(world, **spec)
+    if not offer.accepted:
+        raise AssertionError(f"scenario GIVE_ATTEMPT rejected: {offer.reason}")
+    answer = respond_to_attempt(
+        world, attempt_id=offer.attempt_id, responder=spec["receiver"],
+        response=ACCEPT, presence=spec["presence"], location=spec["location"],
+        occurred_at=spec["occurred_at"],
+    )
+    if not answer.accepted:
+        raise AssertionError(f"scenario ACCEPT rejected: {answer.reason}")
+    return answer.event_id
 
 
 def seed_world(world: WorldStore, holder: str = "warren") -> None:
@@ -289,9 +341,34 @@ def new_wall_event(d: str, occurred_at: str) -> None:
     world = WorldStore(world_conn)
     # A second stow needs the object un-stowed first; the engine would reject
     # otherwise. Retrieving is not an event in v0.4.
-    world._set_object_location("lighter-1", "warren", None)
+    world._set_stow("lighter-1", None)
     wall_event(world, occurred_at)
     PerceptionRouter(world, minds_conn).derive_pending()
+
+
+def offer_phase(d: str) -> dict:
+    """Make a valid offer, derive perceptions, and STOP. The attempt persists."""
+    world_conn, minds_conn = _open_both(d)
+    world = WorldStore(world_conn)
+    seed_world(world)
+    setup_social_scene(world)
+    result = social_offer(world)
+    PerceptionRouter(world, minds_conn).derive_pending()
+    return {"accepted": result.accepted, "attempt_id": result.attempt_id,
+            "outcome": result.outcome}
+
+
+def answer_phase(d: str, attempt_id: str | None, response: str) -> dict:
+    """A separate process answers a PENDING offer read back from disk."""
+    world_conn, minds_conn = _open_both(d)
+    world = WorldStore(world_conn)
+    if attempt_id is None:
+        pending = world.pending_attempts()
+        attempt_id = pending[0]["attempt_id"] if pending else None
+    result = social_answer(world, attempt_id, response)
+    PerceptionRouter(world, minds_conn).derive_pending()
+    return {"accepted": result.accepted, "reason": result.reason,
+            "attempt_id": attempt_id, "outcome": result.outcome}
 
 
 def recover(d: str) -> int:
@@ -313,8 +390,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--phase", required=True,
         choices=["populate", "recover", "recall", "move",
-                 "wall-populate", "wall-add", "wall-remove", "wall-event"],
+                 "wall-populate", "wall-add", "wall-remove", "wall-event",
+                 "offer", "answer"],
     )
+    ap.add_argument("--response", choices=["ACCEPT", "REFUSE"], default="REFUSE")
+    ap.add_argument("--attempt", default=None)
     ap.add_argument("--wall", choices=["yes", "no"], default="yes")
     ap.add_argument("--at", default="0002-01-01T00:00:00Z")
     ap.add_argument("--crash-before-derive", type=int, default=None)
@@ -328,6 +408,10 @@ def main(argv: list[str] | None = None) -> int:
         wall_populate(args.dir, args.wall == "yes", args.crash_before_derive)
     elif args.phase in ("wall-add", "wall-remove"):
         set_wall(args.dir, args.phase == "wall-add")
+    elif args.phase == "offer":
+        print(json.dumps(offer_phase(args.dir)))
+    elif args.phase == "answer":
+        print(json.dumps(answer_phase(args.dir, args.attempt, args.response)))
     elif args.phase == "wall-event":
         new_wall_event(args.dir, args.at)
     elif args.phase == "move":
