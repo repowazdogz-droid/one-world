@@ -19,6 +19,18 @@ CREATE TABLE IF NOT EXISTS being (
     nature        TEXT NOT NULL CHECK (nature IN ('human', 'ai'))
 );
 
+-- MUTABLE present-day world state: where each being is NOW. Positions are
+-- integer centimetres; facing is an integer direction vector, not both zero.
+-- Historical perception must NEVER be derived from this table -- see world_pose.
+CREATE TABLE IF NOT EXISTS being_pose (
+    being_id   TEXT PRIMARY KEY REFERENCES being(being_id),
+    x_cm       INTEGER NOT NULL,
+    y_cm       INTEGER NOT NULL,
+    facing_x   INTEGER NOT NULL,
+    facing_y   INTEGER NOT NULL,
+    CHECK (facing_x != 0 OR facing_y != 0)
+);
+
 -- The immutable record of what actually happened, in full.
 CREATE TABLE IF NOT EXISTS world_event (
     event_id      TEXT PRIMARY KEY,
@@ -27,6 +39,10 @@ CREATE TABLE IF NOT EXISTS world_event (
     location      TEXT NOT NULL,
     actor_id      TEXT NOT NULL REFERENCES being(being_id),
     payload_json  TEXT NOT NULL,
+    event_x_cm    INTEGER NOT NULL,      -- where the observable action happened
+    event_y_cm    INTEGER NOT NULL,
+    audio_mode    TEXT
+                  CHECK (audio_mode IS NULL OR audio_mode IN ('PUBLIC', 'DIRECTED')),
     occurred_at   TEXT NOT NULL          -- descriptive only; NEVER used to order
 );
 
@@ -53,8 +69,31 @@ CREATE TRIGGER IF NOT EXISTS world_presence_no_delete
 BEFORE DELETE ON world_presence
 BEGIN SELECT RAISE(ABORT, 'world_presence is append-only'); END;
 
+-- IMMUTABLE event-time pose snapshot: where everyone present WAS when the event
+-- happened. Written in the same transaction as the event and never revisited.
+-- This is the authoritative sensing input; being_pose is not.
+CREATE TABLE IF NOT EXISTS world_pose (
+    event_id   TEXT NOT NULL REFERENCES world_event(event_id),
+    being_id   TEXT NOT NULL REFERENCES being(being_id),
+    x_cm       INTEGER NOT NULL,
+    y_cm       INTEGER NOT NULL,
+    facing_x   INTEGER NOT NULL,
+    facing_y   INTEGER NOT NULL,
+    PRIMARY KEY (event_id, being_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS world_pose_no_update
+BEFORE UPDATE ON world_pose
+BEGIN SELECT RAISE(ABORT, 'world_pose is immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS world_pose_no_delete
+BEFORE DELETE ON world_pose
+BEGIN SELECT RAISE(ABORT, 'world_pose is append-only'); END;
+
 -- Who perceived the event, and at what fidelity. Absent row == did not perceive.
--- Persisted canonically so that projection is replayable after a restart.
+-- DERIVED at commit time by sensing.sense_event from world_pose; in v0.1 this
+-- was author-supplied. Persisted canonically so that projection is replayable
+-- after a restart WITHOUT re-consulting present-day positions.
 CREATE TABLE IF NOT EXISTS world_observation (
     event_id  TEXT NOT NULL REFERENCES world_event(event_id),
     being_id  TEXT NOT NULL REFERENCES being(being_id),

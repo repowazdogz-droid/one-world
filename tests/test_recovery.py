@@ -155,7 +155,7 @@ def test_event_marked_done_only_after_its_perceptions_are_durable(tmp_path):
     connection, i.e. durably committed rather than merely staged.
     """
     from one_world.perception import PerceptionRouter
-    from one_world.scenario import BEINGS, SCENARIO
+    from one_world.scenario import BEINGS, SCENARIO, apply_step
     from one_world.world import WorldStore
 
     wc = schema.open_world(os.path.join(tmp_path, "world.db"))
@@ -165,8 +165,8 @@ def test_event_marked_done_only_after_its_perceptions_are_durable(tmp_path):
     world = WorldStore(wc)
     for being_id, name, nature in BEINGS:
         world.add_being(being_id, name, nature)
-    for spec in SCENARIO:
-        world.commit_event(**spec)
+    for step in SCENARIO:
+        apply_step(world, step)
 
     # A separate connection sees only committed rows.
     observer = sqlite3.connect(os.path.join(tmp_path, "minds.db"))
@@ -206,7 +206,7 @@ def test_derivation_order_follows_world_seq_not_outbox_row_order(tmp_path):
     are a SUBSEQUENCE of canonical order -- gaps allowed, inversions never.
     """
     from one_world.perception import PerceptionRouter
-    from one_world.scenario import BEINGS, SCENARIO
+    from one_world.scenario import BEINGS, SCENARIO, apply_step
     from one_world.world import WorldStore
 
     wc = schema.open_world(os.path.join(tmp_path, "world.db"))
@@ -217,7 +217,7 @@ def test_derivation_order_follows_world_seq_not_outbox_row_order(tmp_path):
     for being_id, name, nature in BEINGS:
         world.add_being(being_id, name, nature)
 
-    ids = [world.commit_event(**spec) for spec in SCENARIO]  # all PENDING
+    ids = [apply_step(world, step) for step in SCENARIO]  # all PENDING
     assert len(world.pending_projections()) == len(ids)
 
     rows = [dict(r) for r in wc.execute("SELECT * FROM projection_outbox")]

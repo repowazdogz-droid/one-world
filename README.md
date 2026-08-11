@@ -76,6 +76,62 @@ pending work in `world_seq` order. Perceptions are keyed
 neither duplicates rows nor burns a sequence number. Canonical events stay
 immutable; only the outbox row mutates.
 
+## v0.2: physical perception
+
+v0.1 had an author hand `CLEAR` / `COARSE` to `commit_event`. That parameter is
+gone. `commit_event` now snapshots everyone's pose into `world_pose` and derives
+the grades with `sensing.sense_event`, in the same transaction.
+
+**The model.** Positions are integer centimetres; facing is an integer direction
+vector. Every predicate is exact integer arithmetic — no `sqrt`, `cos`, or
+`atan2`, and no floating point anywhere. The 45° cone test works because
+cos²(45°) = ½, so `dot > 0 and 2·dot² ≥ |v|²·|f|²`.
+
+```
+VISUAL   actor of the event            -> CLEAR   (self/agency, see below)
+         observer standing on it       -> CLEAR   (no direction to test)
+         beyond VIEW_RANGE_CM   1500   -> nothing
+         outside the +-45 deg cone     -> nothing
+         within DETAIL_RANGE_CM  300   -> CLEAR
+         otherwise                     -> COARSE
+
+AUDIO    speaker                       -> CLEAR
+         within radius(mode)           -> CLEAR   PUBLIC 1000 / DIRECTED 150
+         otherwise                     -> nothing
+         binary: hearing never yields COARSE
+```
+
+Boundaries are explicit: range and cone edges are **inclusive**; exactly abeam
+(90° off facing) is **exclusive**. Unknown event kinds and audio modes raise.
+
+Two rules are worth stating plainly, because their names flatter them:
+
+**Actor → CLEAR is self/agency knowledge, not vision.** An actor is taken to
+know what they themselves just did. No geometry is consulted. It is not evidence
+that the actor visually perceived their own action; it exists so the degenerate
+case — an actor at zero distance from their own event, where facing means
+nothing — has an explicit answer rather than an arithmetic accident.
+
+**DIRECTED speech is just a shorter hearing radius.** It is not addressee-aware:
+the model never consults who was being spoken to, and anyone inside the radius
+hears the sentence exactly as the addressee does. It is not an acoustic model
+either — no attenuation, volume, directivity, masking, or walls. Ava hears the
+private line and Noah does not because of 100 cm versus 802 cm, and nothing
+else.
+
+**Historical perception.** `being_pose` is mutable present-day state.
+`world_pose` is the immutable event-time snapshot, and it — never `being_pose` —
+is what perception was derived from. Grades are computed once, at commit, and
+stored in `world_observation`, so crash recovery replays a decision rather than
+re-taking it. Walking closer after the fact cannot retroactively sharpen what
+you remember.
+
+**Occlusion is deferred, deliberately.** A wall would need its own event-time
+snapshot discipline to stay consistent with everything else here, and the
+acceptance scenario is fully determined by distance and orientation without it.
+Adding it now would buy realism the milestone does not need at the cost of the
+machinery the milestone is actually about.
+
 ## Accepted v0.1 limitation: an unprojectable event wedges the queue
 
 Projection fails closed. If `project()` raises for a committed event — an

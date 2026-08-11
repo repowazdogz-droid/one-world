@@ -9,6 +9,8 @@ import json
 import sqlite3
 from typing import Any
 
+from one_world.sensing import sense_event
+
 
 def _dumps(obj: Any) -> str:
     # sort_keys keeps stored bytes deterministic across runs.
@@ -45,6 +47,30 @@ class WorldStore:
 
     # -- commit ---------------------------------------------------------
 
+    # -- present-day physical state -------------------------------------
+
+    def set_pose(self, being_id: str, x_cm: int, y_cm: int, facing_x: int, facing_y: int) -> None:
+        """Move/turn a being NOW. Mutable; never consulted for past events."""
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO being_pose (being_id, x_cm, y_cm, facing_x, facing_y) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(being_id) DO UPDATE SET "
+                "x_cm = excluded.x_cm, y_cm = excluded.y_cm, "
+                "facing_x = excluded.facing_x, facing_y = excluded.facing_y",
+                (being_id, x_cm, y_cm, facing_x, facing_y),
+            )
+
+    def current_pose(self, being_id: str) -> tuple[int, int, int, int]:
+        row = self._conn.execute(
+            "SELECT x_cm, y_cm, facing_x, facing_y FROM being_pose WHERE being_id = ?",
+            (being_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"{being_id} has no pose")
+        return (row["x_cm"], row["y_cm"], row["facing_x"], row["facing_y"])
+
+    # -- commit ---------------------------------------------------------
+
     def commit_event(
         self,
         *,
@@ -53,35 +79,64 @@ class WorldStore:
         actor_id: str,
         payload: dict,
         presence: list[str],
-        observations: dict[str, str],
+        event_x_cm: int,
+        event_y_cm: int,
         occurred_at: str,
+        audio_mode: str | None = None,
     ) -> str:
-        """Append one immutable event and mark it PENDING projection.
+        """Append one immutable event, SNAPSHOT the scene, DERIVE who perceived
+        what, and mark it PENDING projection -- all in one transaction.
 
-        The outbox row is written in the SAME transaction as the event, so a
-        committed event can never exist without a record that it still owes
-        perceptions.
+        There is no `observations` parameter. Grades are derived by
+        sensing.sense_event from the event-time pose snapshot, so nobody hands
+        the system the answer it is supposed to work out.
+
+        Snapshotting before sensing is what makes historical perception stable:
+        the grades stored here are a function of where everyone WAS, and later
+        movement cannot reach back and change them.
         """
         with self._conn:
             seq = self._next_world_seq()
             event_id = f"evt-{seq:06d}"  # deterministic; no UUID anywhere
             self._conn.execute(
                 "INSERT INTO world_event "
-                "(event_id, world_seq, kind, location, actor_id, payload_json, occurred_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (event_id, seq, kind, location, actor_id, _dumps(payload), occurred_at),
+                "(event_id, world_seq, kind, location, actor_id, payload_json, "
+                "event_x_cm, event_y_cm, audio_mode, occurred_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (event_id, seq, kind, location, actor_id, _dumps(payload),
+                 event_x_cm, event_y_cm, audio_mode, occurred_at),
             )
+
+            poses: dict[str, tuple[int, int, int, int]] = {}
             for being_id in sorted(presence):
                 self._conn.execute(
                     "INSERT INTO world_presence (event_id, being_id) VALUES (?, ?)",
                     (event_id, being_id),
                 )
+                pose = self.current_pose(being_id)  # fails closed if absent
+                poses[being_id] = pose
+                self._conn.execute(
+                    "INSERT INTO world_pose "
+                    "(event_id, being_id, x_cm, y_cm, facing_x, facing_y) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (event_id, being_id, *pose),
+                )
+
+            observations = sense_event(
+                kind=kind,
+                actor_id=actor_id,
+                event_x_cm=event_x_cm,
+                event_y_cm=event_y_cm,
+                audio_mode=audio_mode,
+                poses=poses,
+            )
             for being_id, grade in sorted(observations.items()):
                 self._conn.execute(
                     "INSERT INTO world_observation (event_id, being_id, grade) "
                     "VALUES (?, ?, ?)",
                     (event_id, being_id, grade),
                 )
+
             self._conn.execute(
                 "INSERT INTO projection_outbox (event_id, world_seq, state) "
                 "VALUES (?, ?, 'PENDING')",
@@ -130,6 +185,14 @@ class WorldStore:
                 (event_id,),
             )
         ]
+        poses = {
+            r["being_id"]: (r["x_cm"], r["y_cm"], r["facing_x"], r["facing_y"])
+            for r in self._conn.execute(
+                "SELECT being_id, x_cm, y_cm, facing_x, facing_y FROM world_pose "
+                "WHERE event_id = ? ORDER BY being_id",
+                (event_id,),
+            )
+        }
         return {
             "event_id": row["event_id"],
             "world_seq": row["world_seq"],
@@ -137,8 +200,12 @@ class WorldStore:
             "location": row["location"],
             "actor_id": row["actor_id"],
             "payload": json.loads(row["payload_json"]),
+            "event_x_cm": row["event_x_cm"],
+            "event_y_cm": row["event_y_cm"],
+            "audio_mode": row["audio_mode"],
             "occurred_at": row["occurred_at"],
             "presence": presence,
+            "poses": poses,          # event-time snapshot, NOT current positions
             "observations": observations,
         }
 
