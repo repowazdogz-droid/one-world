@@ -116,6 +116,65 @@ SCENARIO = [
 CANONICAL_EVENT_COUNT = len(SCENARIO)
 
 
+# ---------------------------------------------------------------------------
+# v0.3 scene: two observers with IDENTICAL relevant visual geometry, separated
+# only by canonical world structure.
+#
+#            y
+#        50  |          |w1
+#         0  A(-200,0)->  [X(0,0)]  |  <-N(200,0)
+#       -50  |          |w1
+#            -200        0    100   200      x
+#
+# Ava and Noah are BOTH 200 cm from the event, BOTH facing straight at it, and
+# BOTH inside DETAIL_RANGE_CM (300). Under v0.2 each would be CLEAR. The only
+# difference is that wall w1 stands across Noah's line of sight.
+# ---------------------------------------------------------------------------
+
+WALL_ID = "w1"
+BLOCKING_WALL = (100, -50, 100, 50)
+
+WALL_SCENE_POSES = {
+    "warren": (0, 0, 1, 0),      # actor, at the event
+    "ava": (-200, 0, 1, 0),      # 200 cm west, looking east
+    "noah": (200, 0, -1, 0),     # 200 cm east, looking west
+}
+
+#: Noah relocated so the same wall no longer crosses his sight line.
+#: (200,200) -> (0,0) passes x=100 at y=100, clear of the wall's y range.
+NOAH_CLEAR_OF_WALL = (200, 200, -1, -1)
+
+WALL_EVENT = {
+    "kind": "STOW",
+    "location": ROOM,
+    "actor_id": "warren",
+    "payload": {"actor": "warren", "object": "red lighter", "place": "the table"},
+    "presence": ALL_THREE,
+    "event_x_cm": 0,
+    "event_y_cm": 0,
+    "occurred_at": "0002-01-01T00:00:00Z",
+}
+
+
+def setup_wall_scene(world: WorldStore, *, with_wall: bool, noah_pose=None) -> None:
+    """Place everyone, and build or omit the blocking wall."""
+    poses = dict(WALL_SCENE_POSES)
+    if noah_pose is not None:
+        poses["noah"] = noah_pose
+    for being_id, pose in sorted(poses.items()):
+        world.set_pose(being_id, *pose)
+    if with_wall:
+        world.add_wall(WALL_ID, *BLOCKING_WALL)
+    else:
+        world.remove_wall(WALL_ID)
+
+
+def wall_event(world: WorldStore, occurred_at: str) -> str:
+    spec = dict(WALL_EVENT)
+    spec["occurred_at"] = occurred_at
+    return world.commit_event(**spec)
+
+
 def world_path(d: str) -> str:
     return os.path.join(d, "world.db")
 
@@ -166,6 +225,38 @@ def move(d: str, being_id: str, x: int, y: int, fx: int, fy: int) -> None:
     WorldStore(world_conn).set_pose(being_id, x, y, fx, fy)
 
 
+def wall_populate(d: str, with_wall: bool, crash_before_derive: int | None) -> None:
+    """The v0.3 acceptance scene: one event, wall present or absent."""
+    world_conn, minds_conn = _open_both(d)
+    world = WorldStore(world_conn)
+    for being_id, name, nature in BEINGS:
+        world.add_being(being_id, name, nature)
+    setup_wall_scene(world, with_wall=with_wall)
+    wall_event(world, WALL_EVENT["occurred_at"])
+    if crash_before_derive is not None:
+        os._exit(9)
+    PerceptionRouter(world, minds_conn).derive_pending()
+
+
+def set_wall(d: str, present: bool) -> None:
+    """Change present-day geometry. Must not affect past perceptions."""
+    world_conn = schema.open_world(world_path(d))
+    schema.init_world(world_conn)
+    world = WorldStore(world_conn)
+    if present:
+        world.add_wall(WALL_ID, *BLOCKING_WALL)
+    else:
+        world.remove_wall(WALL_ID)
+
+
+def new_wall_event(d: str, occurred_at: str) -> None:
+    """Commit a further equivalent event under TODAY's geometry."""
+    world_conn, minds_conn = _open_both(d)
+    world = WorldStore(world_conn)
+    wall_event(world, occurred_at)
+    PerceptionRouter(world, minds_conn).derive_pending()
+
+
 def recover(d: str) -> int:
     world_conn, minds_conn = _open_both(d)
     router = PerceptionRouter(WorldStore(world_conn), minds_conn)
@@ -183,8 +274,12 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True)
     ap.add_argument(
-        "--phase", required=True, choices=["populate", "recover", "recall", "move"]
+        "--phase", required=True,
+        choices=["populate", "recover", "recall", "move",
+                 "wall-populate", "wall-add", "wall-remove", "wall-event"],
     )
+    ap.add_argument("--wall", choices=["yes", "no"], default="yes")
+    ap.add_argument("--at", default="0002-01-01T00:00:00Z")
     ap.add_argument("--crash-before-derive", type=int, default=None)
     for flag in ("--being", "--x", "--y", "--fx", "--fy"):
         ap.add_argument(flag)
@@ -192,6 +287,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.phase == "populate":
         populate(args.dir, args.crash_before_derive)
+    elif args.phase == "wall-populate":
+        wall_populate(args.dir, args.wall == "yes", args.crash_before_derive)
+    elif args.phase in ("wall-add", "wall-remove"):
+        set_wall(args.dir, args.phase == "wall-add")
+    elif args.phase == "wall-event":
+        new_wall_event(args.dir, args.at)
     elif args.phase == "move":
         move(args.dir, args.being, int(args.x), int(args.y), int(args.fx), int(args.fy))
     elif args.phase == "recover":

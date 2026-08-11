@@ -69,6 +69,32 @@ class WorldStore:
             raise KeyError(f"{being_id} has no pose")
         return (row["x_cm"], row["y_cm"], row["facing_x"], row["facing_y"])
 
+    def add_wall(self, wall_id: str, x1: int, y1: int, x2: int, y2: int) -> None:
+        """Build a wall NOW. Mutable; never consulted for past events."""
+        if (x1, y1) == (x2, y2):
+            raise ValueError("zero-length wall rejected: no occlusion semantics")
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO wall (wall_id, x1_cm, y1_cm, x2_cm, y2_cm) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(wall_id) DO UPDATE SET "
+                "x1_cm = excluded.x1_cm, y1_cm = excluded.y1_cm, "
+                "x2_cm = excluded.x2_cm, y2_cm = excluded.y2_cm",
+                (wall_id, x1, y1, x2, y2),
+            )
+
+    def remove_wall(self, wall_id: str) -> None:
+        """Demolish a wall NOW. Past events keep their own snapshot of it."""
+        with self._conn:
+            self._conn.execute("DELETE FROM wall WHERE wall_id = ?", (wall_id,))
+
+    def current_walls(self) -> list[tuple[str, int, int, int, int]]:
+        return [
+            (r["wall_id"], r["x1_cm"], r["y1_cm"], r["x2_cm"], r["y2_cm"])
+            for r in self._conn.execute(
+                "SELECT wall_id, x1_cm, y1_cm, x2_cm, y2_cm FROM wall ORDER BY wall_id"
+            )
+        ]
+
     # -- commit ---------------------------------------------------------
 
     def commit_event(
@@ -92,8 +118,9 @@ class WorldStore:
         the system the answer it is supposed to work out.
 
         Snapshotting before sensing is what makes historical perception stable:
-        the grades stored here are a function of where everyone WAS, and later
-        movement cannot reach back and change them.
+        the grades stored here are a function of where everyone WAS and which
+        walls STOOD at the time, and neither later movement nor later
+        demolition can reach back and change them.
         """
         with self._conn:
             seq = self._next_world_seq()
@@ -122,6 +149,16 @@ class WorldStore:
                     (event_id, being_id, *pose),
                 )
 
+            walls = []
+            for wall_id, x1, y1, x2, y2 in self.current_walls():
+                walls.append((x1, y1, x2, y2))
+                self._conn.execute(
+                    "INSERT INTO world_wall "
+                    "(event_id, wall_id, x1_cm, y1_cm, x2_cm, y2_cm) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (event_id, wall_id, x1, y1, x2, y2),
+                )
+
             observations = sense_event(
                 kind=kind,
                 actor_id=actor_id,
@@ -129,6 +166,7 @@ class WorldStore:
                 event_y_cm=event_y_cm,
                 audio_mode=audio_mode,
                 poses=poses,
+                walls=tuple(walls),
             )
             for being_id, grade in sorted(observations.items()):
                 self._conn.execute(
@@ -193,6 +231,14 @@ class WorldStore:
                 (event_id,),
             )
         }
+        walls = {
+            r["wall_id"]: (r["x1_cm"], r["y1_cm"], r["x2_cm"], r["y2_cm"])
+            for r in self._conn.execute(
+                "SELECT wall_id, x1_cm, y1_cm, x2_cm, y2_cm FROM world_wall "
+                "WHERE event_id = ? ORDER BY wall_id",
+                (event_id,),
+            )
+        }
         return {
             "event_id": row["event_id"],
             "world_seq": row["world_seq"],
@@ -206,6 +252,7 @@ class WorldStore:
             "occurred_at": row["occurred_at"],
             "presence": presence,
             "poses": poses,          # event-time snapshot, NOT current positions
+            "walls": walls,          # event-time geometry, NOT today's layout
             "observations": observations,
         }
 

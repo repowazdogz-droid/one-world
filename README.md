@@ -132,6 +132,45 @@ acceptance scenario is fully determined by distance and orientation without it.
 Adding it now would buy realism the milestone does not need at the cost of the
 machinery the milestone is actually about.
 
+## v0.3: occlusion — the world can block access to information
+
+v0.2 let sight pass through solid matter. v0.3 adds walls: two inhabitants at
+identical distance and orientation can now acquire different histories because
+structure stood between one of them and the event.
+
+**A wall** is a line segment in the same integer-centimetre plane. It is a
+visual information barrier, nothing more — no thickness, material, doors,
+windows, transparency, or sound occlusion.
+
+**Occlusion semantics**, chosen rather than inherited:
+
+> A wall occludes iff some point of the **closed** wall segment lies on the
+> sight segment **excluding the sight segment's own two endpoints**.
+
+Each half is deliberate. The *closed wall* means sight grazing a wall's endpoint
+is blocked — a barrier should err toward withholding, never toward leaking,
+which is the same instinct as fail-closed projection. The *open sight line*
+means an observer standing on a wall is not blinded by it, and an event
+happening on a wall is still visible: you are at the barrier, not behind it.
+Blocking there would mean standing against a wall blinds you to everything.
+
+Zero-length walls are rejected at `add_wall` and by a CHECK constraint, rather
+than being given invented semantics. All predicates are exact integer
+cross-products — still no floating point anywhere.
+
+**Historical geometry.** `wall` is mutable present-day structure; `world_wall`
+is the immutable per-event snapshot, written in the same transaction as the
+event, exactly mirroring `being_pose` / `world_pose`. `world_wall.wall_id`
+deliberately has no foreign key to `wall`, because a wall may be demolished and
+the historical record of it must survive that. Demolishing a wall cannot
+retroactively grant information about an earlier event, and building one cannot
+retroactively remove it.
+
+**Accepted v0.3 limitation.** `set_pose`, `add_wall` and `remove_wall` change
+canonical present-day state *without themselves being events*. Nobody perceives
+movement or construction; there is no history of who built what or who saw them
+build it. v0.3 tests historical perception, not yet perception of change.
+
 ## Accepted v0.1 limitation: an unprojectable event wedges the queue
 
 Projection fails closed. If `project()` raises for a committed event — an

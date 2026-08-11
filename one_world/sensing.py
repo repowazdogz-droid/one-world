@@ -49,7 +49,7 @@ AUDIO_RANGE_CM = {
 }
 
 
-def _see(observer_id, actor_id, ox, oy, fx, fy, ex, ey):
+def _see(observer_id, actor_id, ox, oy, fx, fy, ex, ey, walls):
     if observer_id == actor_id:
         # CALIBRATION -- this is SELF / AGENCY knowledge in a deliberately small
         # model: an actor is taken to know what they themselves just did. It is
@@ -65,6 +65,8 @@ def _see(observer_id, actor_id, ox, oy, fx, fy, ex, ey):
         return None
     if not geometry.in_facing_cone(ox, oy, fx, fy, ex, ey):
         return None
+    if geometry.occluded_by_any(walls, ox, oy, ex, ey):
+        return None  # v0.3: solid structure between observer and event
     if dsq <= DETAIL_RANGE_CM * DETAIL_RANGE_CM:
         return "CLEAR"
     return "COARSE"
@@ -89,14 +91,28 @@ def sense_event(
     event_y_cm: int,
     audio_mode: str | None,
     poses: dict[str, tuple[int, int, int, int]],
+    walls: tuple,
 ) -> dict[str, str]:
-    """Derive {being_id: grade} for one event from event-time poses.
+    """Derive {being_id: grade} for one event from event-time poses and geometry.
 
     Beings who perceived nothing are ABSENT from the result, matching the v0.1
     convention that a missing world_observation row means "did not perceive".
 
-    Pure and total over its inputs: same poses and parameters, same answer,
-    on any machine and at any later time.
+    Pure and total over its inputs: same poses, geometry and parameters, same
+    answer, on any machine and at any later time.
+
+    `walls` is REQUIRED and has no default. Since canonical structure now
+    changes what people perceive, it is a load-bearing sensing input, and the
+    two situations must stay distinguishable:
+
+        walls=()          an explicit canonical fact -- this event-time
+                          snapshot contained no walls
+        walls omitted     a programmer error -- a required input was not
+                          supplied
+
+    A default would silently collapse the second into the first and quietly
+    restore unoccluded v0.2 sensing, which is exactly the failure this
+    signature exists to prevent.
     """
     modality = MODALITY.get(kind)
     if modality is None:
@@ -106,10 +122,13 @@ def sense_event(
         if audio_mode is not None:
             raise ValueError(f"{kind!r} is visual but carries audio_mode {audio_mode!r}")
         graded = {
-            being_id: _see(being_id, actor_id, x, y, fx, fy, event_x_cm, event_y_cm)
+            being_id: _see(being_id, actor_id, x, y, fx, fy,
+                           event_x_cm, event_y_cm, walls)
             for being_id, (x, y, fx, fy) in sorted(poses.items())
         }
     else:
+        # Walls are a VISUAL barrier only. Sound occlusion is out of scope for
+        # v0.3 and is deliberately not modelled: `walls` is ignored here.
         if actor_id not in poses:
             raise ValueError(f"speaker {actor_id!r} has no event-time pose")
         sx, sy, _, _ = poses[actor_id]

@@ -31,6 +31,18 @@ CREATE TABLE IF NOT EXISTS being_pose (
     CHECK (facing_x != 0 OR facing_y != 0)
 );
 
+-- MUTABLE present-day world structure. Walls are visual information barriers,
+-- not realistic physical objects: no thickness, material, doors or windows.
+-- Zero-length walls are rejected rather than given invented semantics.
+CREATE TABLE IF NOT EXISTS wall (
+    wall_id  TEXT PRIMARY KEY,
+    x1_cm    INTEGER NOT NULL,
+    y1_cm    INTEGER NOT NULL,
+    x2_cm    INTEGER NOT NULL,
+    y2_cm    INTEGER NOT NULL,
+    CHECK (x1_cm != x2_cm OR y1_cm != y2_cm)
+);
+
 -- The immutable record of what actually happened, in full.
 CREATE TABLE IF NOT EXISTS world_event (
     event_id      TEXT PRIMARY KEY,
@@ -89,6 +101,30 @@ BEGIN SELECT RAISE(ABORT, 'world_pose is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS world_pose_no_delete
 BEFORE DELETE ON world_pose
 BEGIN SELECT RAISE(ABORT, 'world_pose is append-only'); END;
+
+-- IMMUTABLE event-time geometry snapshot: which walls existed, and where, when
+-- the event happened. Written in the same transaction as the event.
+--
+-- wall_id deliberately has NO foreign key to `wall`: the wall may later be
+-- demolished, and the historical record of it must survive that. This is the
+-- same reasoning that keeps minds.db free of cross-database keys.
+CREATE TABLE IF NOT EXISTS world_wall (
+    event_id  TEXT NOT NULL REFERENCES world_event(event_id),
+    wall_id   TEXT NOT NULL,
+    x1_cm     INTEGER NOT NULL,
+    y1_cm     INTEGER NOT NULL,
+    x2_cm     INTEGER NOT NULL,
+    y2_cm     INTEGER NOT NULL,
+    PRIMARY KEY (event_id, wall_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS world_wall_no_update
+BEFORE UPDATE ON world_wall
+BEGIN SELECT RAISE(ABORT, 'world_wall is immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS world_wall_no_delete
+BEFORE DELETE ON world_wall
+BEGIN SELECT RAISE(ABORT, 'world_wall is append-only'); END;
 
 -- Who perceived the event, and at what fidelity. Absent row == did not perceive.
 -- DERIVED at commit time by sensing.sense_event from world_pose; in v0.1 this

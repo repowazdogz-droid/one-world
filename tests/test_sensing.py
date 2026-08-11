@@ -28,14 +28,14 @@ def see(x, y, fx, fy, ex=0, ey=0):
     """Grade for one observer at (x,y) facing (fx,fy), event at (ex,ey)."""
     return sense_event(
         kind="GIVE", actor_id=ACTOR, event_x_cm=ex, event_y_cm=ey,
-        audio_mode=None, poses={OBS: (x, y, fx, fy)},
+        audio_mode=None, poses={OBS: (x, y, fx, fy)}, walls=(),
     ).get(OBS)
 
 
 def hear(x, y, mode, sx=0, sy=0):
     return sense_event(
         kind="SPEECH", actor_id=ACTOR, event_x_cm=sx, event_y_cm=sy,
-        audio_mode=mode, poses={OBS: (x, y, 1, 0), ACTOR: (sx, sy, 1, 0)},
+        audio_mode=mode, poses={OBS: (x, y, 1, 0), ACTOR: (sx, sy, 1, 0)}, walls=(),
     ).get(OBS)
 
 
@@ -100,7 +100,7 @@ def test_actor_always_perceives_own_event():
     """Agency, not vision: facing away from what you yourself are doing."""
     got = sense_event(
         kind="GIVE", actor_id=ACTOR, event_x_cm=9999, event_y_cm=9999,
-        audio_mode=None, poses={ACTOR: (0, 0, -1, 0)},
+        audio_mode=None, poses={ACTOR: (0, 0, -1, 0)}, walls=(),
     )
     assert got == {ACTOR: "CLEAR"}
 
@@ -131,6 +131,7 @@ def test_hearing_ignores_facing():
         got = sense_event(
             kind="SPEECH", actor_id=ACTOR, event_x_cm=0, event_y_cm=0,
             audio_mode="DIRECTED", poses={OBS: (100, 0, fx, fy), ACTOR: (0, 0, 1, 0)},
+            walls=(),
         )
         assert got.get(OBS) == "CLEAR"
 
@@ -149,7 +150,7 @@ def test_unknown_event_kind_fails_closed():
     """A new kind must declare its modality, not default to full visibility."""
     with pytest.raises(ValueError, match="no sensing rule"):
         sense_event(kind="TELEPORT", actor_id=ACTOR, event_x_cm=0, event_y_cm=0,
-                    audio_mode=None, poses={OBS: (0, 0, 1, 0)})
+                    audio_mode=None, poses={OBS: (0, 0, 1, 0)}, walls=())
 
 
 def test_unknown_audio_mode_fails_closed():
@@ -160,20 +161,20 @@ def test_unknown_audio_mode_fails_closed():
 def test_visual_event_carrying_audio_mode_fails_closed():
     with pytest.raises(ValueError, match="visual but carries audio_mode"):
         sense_event(kind="GIVE", actor_id=ACTOR, event_x_cm=0, event_y_cm=0,
-                    audio_mode="PUBLIC", poses={OBS: (0, 0, 1, 0)})
+                    audio_mode="PUBLIC", poses={OBS: (0, 0, 1, 0)}, walls=())
 
 
 def test_speech_without_speaker_pose_fails_closed():
     with pytest.raises(ValueError, match="no event-time pose"):
         sense_event(kind="SPEECH", actor_id=ACTOR, event_x_cm=0, event_y_cm=0,
-                    audio_mode="PUBLIC", poses={OBS: (0, 0, 1, 0)})
+                    audio_mode="PUBLIC", poses={OBS: (0, 0, 1, 0)}, walls=())
 
 
 def test_beings_who_perceive_nothing_are_absent_not_null():
     """Matches the v0.1 convention: a missing row means did not perceive."""
     got = sense_event(
         kind="GIVE", actor_id=ACTOR, event_x_cm=0, event_y_cm=0, audio_mode=None,
-        poses={"near": (-100, 0, 1, 0), "far": (-99999, 0, 1, 0)},
+        poses={"near": (-100, 0, 1, 0), "far": (-99999, 0, 1, 0)}, walls=(),
     )
     assert got == {"near": "CLEAR"}
 
@@ -182,8 +183,8 @@ def test_sensing_is_pure_and_repeatable():
     """Same inputs, same answer -- no clock, no randomness, no float."""
     poses = {"a": (-800, 0, 1, 0), "b": (-100, 0, 1, 0), "c": (0, 900, 1, 0)}
     first = sense_event(kind="GIVE", actor_id=ACTOR, event_x_cm=0, event_y_cm=0,
-                        audio_mode=None, poses=poses)
+                        audio_mode=None, poses=poses, walls=())
     for _ in range(5):
         assert sense_event(kind="GIVE", actor_id=ACTOR, event_x_cm=0, event_y_cm=0,
-                           audio_mode=None, poses=poses) == first
+                           audio_mode=None, poses=poses, walls=()) == first
     assert first == {"a": "COARSE", "b": "CLEAR"}  # c is abeam -> absent
