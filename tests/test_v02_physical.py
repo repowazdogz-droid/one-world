@@ -71,8 +71,7 @@ def with_noah_at(step_index, pose):
 def move(world, actor, x, y, fx, fy, at="t-move"):
     """A pose change, which v0.6 requires to be a validated action."""
     result = propose_move(world, actor=actor, to_x_cm=x, to_y_cm=y,
-                          facing_x=fx, facing_y=fy, presence=ALL_THREE,
-                          location=ROOM, occurred_at=at)
+                          facing_x=fx, facing_y=fy, location=ROOM, occurred_at=at)
     assert result.accepted, result.reason
     return result
 
@@ -82,11 +81,20 @@ def move(world, actor, x, y, fx, fy, at="t-move"):
 
 def test_commit_event_accepts_no_authored_observation_grade():
     """The v0.1 seam is gone: there is no parameter through which a grade
-    could be handed in."""
+    could be handed in.
+
+    CHANGED BY THE PRESENCE REPAIR. This test used to assert `presence` was
+    among the accepted parameters, which positively encoded the very authority
+    the repair removes: an author could name who was there, and anyone omitted
+    got no event-time pose row and therefore perceived nothing, whatever the
+    geometry said. `presence` now joins `observations` on the forbidden side of
+    this assertion rather than the permitted side.
+    """
     params = inspect.signature(WorldStore.commit_event).parameters
     assert "observations" not in params
     assert "grade" not in params
-    assert {"event_x_cm", "event_y_cm", "audio_mode", "presence"} <= set(params)
+    assert "presence" not in params
+    assert {"event_x_cm", "event_y_cm", "audio_mode"} <= set(params)
 
 
 def test_no_grade_literal_appears_in_the_scenario():
@@ -315,15 +323,36 @@ def test_present_day_pose_changes_only_through_a_recorded_move(tmp_path):
     assert world.all_events()[-1]["kind"] == "MOVE"
 
 
-def test_committing_without_a_pose_fails_closed(tmp_path):
+def test_a_being_with_no_pose_is_simply_not_in_the_world(tmp_path):
+    """CHANGED BY THE PRESENCE REPAIR, and strengthened.
+
+    This test used to name unplaced beings in an authored `presence` list and
+    assert the commit failed closed with "has no pose". That guard protected
+    against an AUTHORING MISTAKE which is now unmakeable: presence is derived
+    from `being_pose`, so every considered being has a pose by construction and
+    the KeyError is unreachable.
+
+    The underlying invariant is unchanged and now structural rather than
+    checked: a being who is not canonically in the world does not sense. What
+    is asserted here is the stronger property -- the unplaced are excluded
+    automatically, and there is no parameter through which to force them in.
+    """
     wc = schema.open_world(os.path.join(tmp_path, "world.db"))
     schema.init_world(wc)
     world = WorldStore(wc)
     for being_id, name, nature in BEINGS:
         world.add_being(being_id, name, nature)
     world.seed_pose("warren", 0, 0, 1, 0)  # ava and noah have no pose
+
+    assert world.placed_beings() == ["warren"]
+    assert "presence" not in inspect.signature(WorldStore.commit_event).parameters
+
     # SCENARIO[1] is the SPEECH step, the one that still goes through
     # commit_event directly; GIVE and STOW now require the action layer.
-    with pytest.raises(KeyError, match="has no pose"):
-        world.commit_event(**SCENARIO[1]["event"])
-    assert world.event_count() == 0, "partial event survived a failed commit"
+    event_id = world.commit_event(**SCENARIO[1]["event"])
+    assert world.event_count() == 1
+
+    event = world.load_event(event_id)
+    assert event["presence"] == ["warren"], "an unplaced being was considered"
+    assert set(event["poses"]) == {"warren"}
+    assert set(event["observations"]) <= {"warren"}

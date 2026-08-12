@@ -97,6 +97,33 @@ class WorldStore:
             (x_cm, y_cm, facing_x, facing_y, being_id),
         )
 
+    def placed_beings(self) -> list[str]:
+        """Everyone canonically IN the world right now, in deterministic order.
+
+        Having a pose IS being physically present: `being_pose` is created only
+        by `seed_pose` and changed only by MOVE, so this set is canonical world
+        state rather than anybody's claim about it.
+
+        This replaces the authored `presence` list that every action used to
+        carry. An author could previously omit a canonically placed inhabitant
+        standing 10 cm from an event, facing it, with nothing in the way, and
+        that inhabitant would perceive nothing -- because the omission removed
+        their event-time pose row, which is the sole input to sensing. Every
+        exact-integer threshold, facing cone and occlusion test in this project
+        sat downstream of that list.
+
+        The same reasoning that deleted the `observations` parameter in v0.2
+        applies: nobody hands the system the answer it is supposed to work out.
+        Who COULD perceive an event is a physical fact about the world, and only
+        the world may state it.
+        """
+        return [
+            r["being_id"]
+            for r in self._conn.execute(
+                "SELECT being_id FROM being_pose ORDER BY being_id"
+            )
+        ]
+
     def current_pose(self, being_id: str) -> tuple[int, int, int, int]:
         row = self._conn.execute(
             "SELECT x_cm, y_cm, facing_x, facing_y FROM being_pose WHERE being_id = ?",
@@ -300,7 +327,6 @@ class WorldStore:
         location: str,
         actor_id: str,
         payload: dict,
-        presence: list[str],
         event_x_cm: int,
         event_y_cm: int,
         occurred_at: str,
@@ -309,9 +335,12 @@ class WorldStore:
         """Append one immutable event, SNAPSHOT the scene, DERIVE who perceived
         what, and mark it PENDING projection -- all in one transaction.
 
-        There is no `observations` parameter. Grades are derived by
-        sensing.sense_event from the event-time pose snapshot, so nobody hands
-        the system the answer it is supposed to work out.
+        There is no `observations` parameter and, since the presence repair, no
+        `presence` parameter either. Grades are derived by sensing.sense_event
+        from the event-time pose snapshot, and WHO GETS a pose row in that
+        snapshot is derived from `placed_beings`. Nobody hands the system the
+        answer it is supposed to work out -- neither what was perceived, nor by
+        whom it could have been.
 
         Snapshotting before sensing is what makes historical perception stable:
         the grades stored here are a function of where everyone WAS and which
@@ -329,7 +358,7 @@ class WorldStore:
         with self._conn:
             return self._append_event_locked(
                 kind=kind, location=location, actor_id=actor_id, payload=payload,
-                presence=presence, event_x_cm=event_x_cm, event_y_cm=event_y_cm,
+                event_x_cm=event_x_cm, event_y_cm=event_y_cm,
                 occurred_at=occurred_at, audio_mode=audio_mode,
             )
 
@@ -340,7 +369,6 @@ class WorldStore:
         location: str,
         actor_id: str,
         payload: dict,
-        presence: list[str],
         event_x_cm: int,
         event_y_cm: int,
         occurred_at: str,
@@ -363,8 +391,11 @@ class WorldStore:
              event_x_cm, event_y_cm, audio_mode, occurred_at),
         )
 
+        # DERIVED, never supplied: everyone canonically in the world gets an
+        # event-time pose row and is therefore CONSIDERED for sensing. Whether
+        # they actually perceive anything is decided below, by geometry alone.
         poses: dict[str, tuple[int, int, int, int]] = {}
-        for being_id in sorted(presence):
+        for being_id in self.placed_beings():
             self._conn.execute(
                 "INSERT INTO world_presence (event_id, being_id) VALUES (?, ?)",
                 (event_id, being_id),

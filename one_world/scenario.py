@@ -72,7 +72,6 @@ SCENARIO = [
             "actor": "warren",
             "receiver": "ava",
             "object_id": "lighter-1",
-            "presence": ALL_THREE,
             "location": ROOM,
             "occurred_at": "0001-01-01T00:00:00Z",
         },
@@ -89,7 +88,6 @@ SCENARIO = [
                 "addressee": "ava",
                 "utterance": "I'm leaving tomorrow",
             },
-            "presence": ALL_THREE,
             "event_x_cm": 0,
             "event_y_cm": 0,
             "audio_mode": "DIRECTED",
@@ -114,7 +112,6 @@ SCENARIO = [
             "actor": "ava",
             "object_id": "lighter-1",
             "place": "jacket pocket",
-            "presence": ALL_THREE,
             "location": ROOM,
             "occurred_at": "0001-01-01T00:02:00Z",
         },
@@ -167,7 +164,7 @@ WALL_EVENT = {
 def wall_action(occurred_at: str) -> dict:
     return {
         "verb": "STOW", "actor": "warren", "object_id": "lighter-1",
-        "place": "the table", "presence": ALL_THREE, "location": ROOM,
+        "place": "the table", "location": ROOM,
         "occurred_at": occurred_at,
     }
 
@@ -210,15 +207,13 @@ def setup_social_scene(world: WorldStore) -> None:
 
 def social_offer(world: WorldStore, occurred_at: str = "0003-01-01T00:00:00Z"):
     return attempt_give(world, actor="warren", receiver="ava",
-                        object_id="lighter-1", presence=ALL_THREE,
-                        location=ROOM, occurred_at=occurred_at)
+                        object_id="lighter-1", location=ROOM, occurred_at=occurred_at)
 
 
 def social_answer(world: WorldStore, attempt_id: str, response: str,
                   occurred_at: str = "0003-01-01T00:01:00Z"):
     return respond_to_attempt(world, attempt_id=attempt_id, responder="ava",
-                              response=response, presence=ALL_THREE,
-                              location=ROOM, occurred_at=occurred_at)
+                              response=response, location=ROOM, occurred_at=occurred_at)
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +304,7 @@ def apply_step(world: WorldStore, step: dict) -> str:
 
 def run_move(world: WorldStore, spec: dict) -> str:
     """A pose change, as the state-changing action it now is."""
-    result = propose_move(world, presence=ALL_THREE, location=ROOM, **spec)
+    result = propose_move(world, location=ROOM, **spec)
     if not result.accepted:
         raise AssertionError(f"scenario MOVE rejected: {result.reason}")
     return result.event_id
@@ -337,7 +332,7 @@ def run_action(world: WorldStore, spec: dict) -> str:
         raise AssertionError(f"scenario GIVE_ATTEMPT rejected: {offer.reason}")
     answer = respond_to_attempt(
         world, attempt_id=offer.attempt_id, responder=spec["receiver"],
-        response=ACCEPT, presence=spec["presence"], location=spec["location"],
+        response=ACCEPT, location=spec["location"],
         occurred_at=spec["occurred_at"],
     )
     if not answer.accepted:
@@ -380,8 +375,7 @@ def move(d: str, being_id: str, x: int, y: int, fx: int, fy: int) -> None:
     world_conn, minds_conn = _open_both(d)
     world = WorldStore(world_conn)
     result = propose_move(world, actor=being_id, to_x_cm=x, to_y_cm=y,
-                          facing_x=fx, facing_y=fy, presence=ALL_THREE,
-                          location=ROOM, occurred_at="0001-01-01T09:00:00Z")
+                          facing_x=fx, facing_y=fy, location=ROOM, occurred_at="0001-01-01T09:00:00Z")
     if not result.accepted:
         raise SystemExit(f"move rejected: {result.reason}")
     PerceptionRouter(world, minds_conn).derive_pending()
@@ -462,7 +456,7 @@ def arrival_populate(d: str, crash_before_derive: bool) -> None:
 
     result = propose_place(world, actor="warren", object_id="lighter-1",
                            x_cm=LIGHTER_LIES_AT[0], y_cm=LIGHTER_LIES_AT[1],
-                           presence=ALL_THREE, location=ROOM,
+                           location=ROOM,
                            occurred_at="0008-01-01T00:00:00Z")
     if not result.accepted:
         raise SystemExit(f"scenario PLACE rejected: {result.reason}")
@@ -470,8 +464,7 @@ def arrival_populate(d: str, crash_before_derive: bool) -> None:
 
     arrival = propose_move(world, actor="ava", to_x_cm=AVA_ARRIVAL[0],
                            to_y_cm=AVA_ARRIVAL[1], facing_x=AVA_ARRIVAL[2],
-                           facing_y=AVA_ARRIVAL[3], presence=ALL_THREE,
-                           location=ROOM, occurred_at="0008-01-01T00:01:00Z")
+                           facing_y=AVA_ARRIVAL[3], location=ROOM, occurred_at="0008-01-01T00:01:00Z")
     if not arrival.accepted:
         raise SystemExit(f"scenario MOVE rejected: {arrival.reason}")
     if crash_before_derive:
@@ -496,7 +489,7 @@ def look_populate(d: str, crash_before_derive: bool) -> None:
 
     placed = propose_place(world, actor="warren", object_id="lighter-1",
                            x_cm=LIGHTER_LIES_AT[0], y_cm=LIGHTER_LIES_AT[1],
-                           presence=["warren", "noah"], location=ROOM,
+                           location=ROOM,
                            occurred_at="0009-01-01T00:00:00Z")
     if not placed.accepted:
         raise SystemExit(f"scenario PLACE rejected: {placed.reason}")
@@ -505,8 +498,7 @@ def look_populate(d: str, crash_before_derive: bool) -> None:
     # Ava enters the world, already stationary, and stays that way.
     world.seed_pose("ava", *LOOK_AVA_POSE)
 
-    looked = propose_look(world, actor="ava", presence=ALL_THREE,
-                          location=ROOM, occurred_at="0009-01-01T00:01:00Z")
+    looked = propose_look(world, actor="ava", location=ROOM, occurred_at="0009-01-01T00:01:00Z")
     if not looked.accepted:
         raise SystemExit(f"scenario LOOK rejected: {looked.reason}")
     if crash_before_derive:
@@ -520,8 +512,7 @@ def look_again(d: str) -> None:
     """A second LOOK from the same unmoved pose."""
     world_conn, minds_conn = _open_both(d)
     world = WorldStore(world_conn)
-    result = propose_look(world, actor="ava", presence=ALL_THREE,
-                          location=ROOM, occurred_at="0009-01-01T00:03:00Z")
+    result = propose_look(world, actor="ava", location=ROOM, occurred_at="0009-01-01T00:03:00Z")
     if not result.accepted:
         raise SystemExit(f"scenario LOOK rejected: {result.reason}")
     PerceptionRouter(world, minds_conn).derive_pending()
@@ -538,7 +529,7 @@ def arrival_disturb(d: str) -> None:
     world_conn, _ = _open_both(d)
     world = WorldStore(world_conn)
     result = propose_pickup(world, actor="warren", object_id="lighter-1",
-                            presence=ALL_THREE, location=ROOM,
+                            location=ROOM,
                             occurred_at="0008-01-01T00:02:00Z")
     if not result.accepted:
         raise SystemExit(f"scenario PICKUP rejected: {result.reason}")

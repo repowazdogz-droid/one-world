@@ -40,13 +40,12 @@ def transfer(world, *, giver, receiver, object_id="lighter-1", at="t"):
     resolving response so callers can assert on the outcome.
     """
     offer = attempt_give(world, actor=giver, receiver=receiver,
-                         object_id=object_id, presence=ALL_THREE,
-                         location=ROOM, occurred_at=at)
+                         object_id=object_id, location=ROOM, occurred_at=at)
     if not offer.accepted:
         return offer
     return respond_to_attempt(world, attempt_id=offer.attempt_id,
                               responder=receiver, response="ACCEPT",
-                              presence=ALL_THREE, location=ROOM, occurred_at=at)
+                              location=ROOM, occurred_at=at)
 
 
 
@@ -319,8 +318,7 @@ def test_impossible_attempt_creates_no_attempt_and_no_event(tmp_path):
     world, wc, mc = fresh(tmp_path)
     before = canonical_snapshot(wc)
     result = attempt_give(world, actor="noah", receiver="warren",
-                          object_id="lighter-1", presence=ALL_THREE,
-                          location=ROOM, occurred_at="t")
+                          object_id="lighter-1", location=ROOM, occurred_at="t")
     assert not result.accepted and result.reason == NOT_POSSESSED
     assert result.attempt_id is None
     assert canonical_snapshot(wc) == before
@@ -331,7 +329,7 @@ def test_impossible_attempt_creates_no_attempt_and_no_event(tmp_path):
 def test_refused_and_impossible_are_distinguishable(tmp_path):
     impossible_world, impossible_wc, _ = fresh(tmp_path / "impossible")
     attempt_give(impossible_world, actor="noah", receiver="warren",
-                 object_id="lighter-1", presence=ALL_THREE, location=ROOM,
+                 object_id="lighter-1", location=ROOM,
                  occurred_at="t")
 
     refused_world, refused_wc, _ = fresh(tmp_path / "refused")
@@ -372,7 +370,7 @@ def test_invalid_response_leaves_no_trace(tmp_path, describe, mutate, expected):
     minds_before = mc.execute("SELECT COUNT(*) FROM perception").fetchone()[0]
 
     result = respond_to_attempt(
-        world, presence=ALL_THREE, location=ROOM, occurred_at="t",
+        world, location=ROOM, occurred_at="t",
         **mutate(world, offer.attempt_id))
     assert not result.accepted, describe
     assert result.reason == expected
@@ -401,8 +399,7 @@ def test_a_response_cannot_resolve_a_different_attempt(tmp_path):
     first = social_offer(world, "t1")
     # Warren still holds it, so a second distinct offer is possible.
     second = attempt_give(world, actor="warren", receiver="noah",
-                          object_id="lighter-1", presence=ALL_THREE,
-                          location=ROOM, occurred_at="t2")
+                          object_id="lighter-1", location=ROOM, occurred_at="t2")
     assert second.accepted and second.attempt_id != first.attempt_id
 
     social_answer(world, first.attempt_id, "REFUSE", "t3")
@@ -434,7 +431,7 @@ def test_social_events_cannot_be_forged_through_commit_event(tmp_path, kind):
         world.commit_event(
             kind=kind, location=ROOM, actor_id="ava",
             payload={"refuser": "ava", "utterance": "forged"},
-            presence=ALL_THREE, event_x_cm=0, event_y_cm=0, occurred_at="t",
+            event_x_cm=0, event_y_cm=0, occurred_at="t",
             audio_mode="DIRECTED" if kind == "REFUSAL" else None)
     assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 0
 
@@ -500,7 +497,7 @@ def test_no_production_path_transfers_possession_without_an_accept(tmp_path):
         )):
             solo, _, _ = fresh(tmp_path / f"solo-{i}-{j}")
             try:
-                fn(solo, **kwargs, presence=ALL_THREE, location=ROOM,
+                fn(solo, **kwargs, location=ROOM,
                    occurred_at="t")
             except TypeError:
                 continue          # wrong shape for this verb; not a transfer
@@ -558,7 +555,7 @@ def test_stow_can_never_change_the_holder(tmp_path):
     world, _, _ = fresh(tmp_path)
     from one_world.actions import propose_stow
     assert propose_stow(world, actor="warren", object_id="lighter-1",
-                        place="pocket", presence=ALL_THREE, location=ROOM,
+                        place="pocket", location=ROOM,
                         occurred_at="t").accepted
     loc = world.object_location("lighter-1")
     assert loc["holder_id"] == "warren" and loc["stowed_in"] == "pocket"

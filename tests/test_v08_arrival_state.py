@@ -74,19 +74,19 @@ def fresh(tmp_path, poses=None):
 
 def place(world, actor, x, y, at="t"):
     return propose_place(world, actor=actor, object_id="lighter-1", x_cm=x,
-                         y_cm=y, presence=ALL_THREE, location=ROOM,
+                         y_cm=y, location=ROOM,
                          occurred_at=at)
 
 
 def pickup(world, actor, at="t"):
     return propose_pickup(world, actor=actor, object_id="lighter-1",
-                          presence=ALL_THREE, location=ROOM, occurred_at=at)
+                          location=ROOM, occurred_at=at)
 
 
 def move(world, actor, pose, at="t"):
     return propose_move(world, actor=actor, to_x_cm=pose[0], to_y_cm=pose[1],
                         facing_x=pose[2], facing_y=pose[3],
-                        presence=ALL_THREE, location=ROOM, occurred_at=at)
+                        location=ROOM, occurred_at=at)
 
 
 def derive(world, mc):
@@ -682,7 +682,7 @@ def test_a_sighting_cannot_be_forged_through_commit_event(tmp_path):
     with pytest.raises(ValueError, match="no sensing rule defined"):
         world.commit_event(kind="SIGHTING", location=ROOM, actor_id="ava",
                            payload={"object": "red lighter", "at": [0, 0]},
-                           presence=ALL_THREE, event_x_cm=0, event_y_cm=0,
+                           event_x_cm=0, event_y_cm=0,
                            occurred_at="t")
     assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 0
 

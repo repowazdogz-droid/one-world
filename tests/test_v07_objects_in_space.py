@@ -62,17 +62,17 @@ def fresh(tmp_path, poses=None):
 
 def place(world, actor, x, y, at="t"):
     return propose_place(world, actor=actor, object_id="lighter-1", x_cm=x,
-                         y_cm=y, presence=ALL_THREE, location=ROOM, occurred_at=at)
+                         y_cm=y, location=ROOM, occurred_at=at)
 
 
 def pickup(world, actor, at="t"):
     return propose_pickup(world, actor=actor, object_id="lighter-1",
-                          presence=ALL_THREE, location=ROOM, occurred_at=at)
+                          location=ROOM, occurred_at=at)
 
 
 def move(world, actor, x, y, fx, fy, at="t"):
     return propose_move(world, actor=actor, to_x_cm=x, to_y_cm=y, facing_x=fx,
-                        facing_y=fy, presence=ALL_THREE, location=ROOM,
+                        facing_y=fy, location=ROOM,
                         occurred_at=at)
 
 
@@ -370,7 +370,7 @@ def test_a_wall_decides_who_sees_the_lighter_put_down(tmp_path):
          lambda w: place(w, "ava", 200, 0), NOT_POSSESSED),
         ("placing a nonexistent object",
          lambda w: propose_place(w, actor="warren", object_id="ghost-9", x_cm=0,
-                                 y_cm=0, presence=ALL_THREE, location=ROOM,
+                                 y_cm=0, location=ROOM,
                                  occurred_at="t"), UNKNOWN_OBJECT),
         ("placing out of reach",
          lambda w: place(w, "warren", 5000, 5000), OUT_OF_REACH),
@@ -378,7 +378,7 @@ def test_a_wall_decides_who_sees_the_lighter_put_down(tmp_path):
          lambda w: pickup(w, "ava"), NOT_ON_THE_GROUND),
         ("picking up a nonexistent object",
          lambda w: propose_pickup(w, actor="ava", object_id="ghost-9",
-                                  presence=ALL_THREE, location=ROOM,
+                                  location=ROOM,
                                   occurred_at="t"), UNKNOWN_OBJECT),
     ],
 )
@@ -454,7 +454,7 @@ def test_place_and_pickup_cannot_be_forged(tmp_path, kind):
         world.commit_event(kind=kind, location=ROOM, actor_id="ava",
                            payload={"actor": "ava", "object": "forged",
                                     "at": [0, 0]},
-                           presence=ALL_THREE, event_x_cm=0, event_y_cm=0,
+                           event_x_cm=0, event_y_cm=0,
                            occurred_at="t")
     assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 0
     assert world.object_location("lighter-1")["holder_id"] == "warren"
@@ -489,7 +489,7 @@ def test_no_public_action_can_relocate_an_object_arbitrarily(tmp_path):
         )):
             solo, _, _ = fresh(tmp_path / f"solo-{i}-{j}")
             try:
-                fn(solo, **kwargs, presence=ALL_THREE, location=ROOM,
+                fn(solo, **kwargs, location=ROOM,
                    occurred_at="t")
             except TypeError:
                 continue

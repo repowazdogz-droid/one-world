@@ -50,7 +50,7 @@ def mutant_scan_is_a_noop(self, **kwargs):
     return None
 
 
-def mutant_look_that_moves(world, *, actor, presence, location, occurred_at):
+def mutant_look_that_moves(world, *, actor, location, occurred_at):
     """CONTROL 2 -- LOOK MUTATES POSE.
 
     Looking "settles" the actor onto a canonical facing. A plausible slip: the
@@ -61,8 +61,7 @@ def mutant_look_that_moves(world, *, actor, presence, location, occurred_at):
         ax, ay, fx, fy = world.current_pose(actor)
         event_id = world._append_event_locked(
             kind="LOOK", location=location, actor_id=actor,
-            payload={"actor": actor}, presence=presence,
-            event_x_cm=ax, event_y_cm=ay, occurred_at=occurred_at)
+            payload={"actor": actor}, event_x_cm=ax, event_y_cm=ay, occurred_at=occurred_at)
         world._move_pose(actor, ax, ay, 1, 0)      # <-- the mutation
         world._record_arrival_scan(
             event_id=event_id, world_seq=int(event_id.split("-")[1]),
@@ -209,8 +208,7 @@ def test_control_a_look_that_moves_breaks_the_non_movement_invariant(tmp_path):
     before = physical_state(wc)
     pose_before = world.current_pose("ava")
 
-    assert mutant_look_that_moves(world, actor="ava", presence=ALL_THREE,
-                                  location=ROOM, occurred_at="t2").accepted
+    assert mutant_look_that_moves(world, actor="ava", location=ROOM, occurred_at="t2").accepted
 
     after = physical_state(wc)
     assert after != before, "the mutation did nothing"
@@ -226,8 +224,7 @@ def test_control_the_moving_look_also_changes_what_she_sees(tmp_path):
     world, wc, mc = fresh(tmp_path)
     assert place(world, "warren", *LIGHTER, at="t1").accepted
     seed_ava(world)
-    assert mutant_look_that_moves(world, actor="ava", presence=ALL_THREE,
-                                  location=ROOM, occurred_at="t2").accepted
+    assert mutant_look_that_moves(world, actor="ava", location=ROOM, occurred_at="t2").accepted
     # Facing forced to +x, away from the lighter at -x: she sees nothing.
     assert sightings(derive(world, mc), "ava") == []
 

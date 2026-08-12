@@ -58,7 +58,7 @@ def fresh(tmp_path, poses=None):
 
 def move(world, actor, x, y, fx, fy, at="t"):
     return propose_move(world, actor=actor, to_x_cm=x, to_y_cm=y, facing_x=fx,
-                        facing_y=fy, presence=ALL_THREE, location=ROOM,
+                        facing_y=fy, location=ROOM,
                         occurred_at=at)
 
 
@@ -111,7 +111,7 @@ def test_no_production_path_moves_a_placed_inhabitant_without_a_move_event(tmp_p
             dict(attempt_id="att-000000", responder="noah", response="ACCEPT"),
         ):
             try:
-                fn(world, **kwargs, presence=ALL_THREE, location=ROOM,
+                fn(world, **kwargs, location=ROOM,
                    occurred_at="t")
             except TypeError:
                 continue
@@ -138,7 +138,7 @@ def test_move_cannot_be_forged_through_commit_event(tmp_path):
         world.commit_event(kind="MOVE", location=ROOM, actor_id="noah",
                            payload={"actor": "noah", "from": [0, 0],
                                     "to": [9, 9], "facing": [1, 0]},
-                           presence=ALL_THREE, event_x_cm=0, event_y_cm=0,
+                           event_x_cm=0, event_y_cm=0,
                            occurred_at="t")
     assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 0
     assert world.current_pose("noah") == START["noah"]
@@ -292,12 +292,11 @@ def test_moving_closer_improves_the_next_event_but_not_the_last(tmp_path):
 
     def exchange(giver, receiver, at):
         made = attempt_give(world, actor=giver, receiver=receiver,
-                            object_id="lighter-1", presence=ALL_THREE,
-                            location=ROOM, occurred_at=at)
+                            object_id="lighter-1", location=ROOM, occurred_at=at)
         assert made.accepted
         assert respond_to_attempt(
             world, attempt_id=made.attempt_id, responder=receiver,
-            response=ACCEPT, presence=ALL_THREE, location=ROOM,
+            response=ACCEPT, location=ROOM,
             occurred_at=at).accepted
 
     exchange("warren", "ava", "t1")                    # events 0,1 -- far away

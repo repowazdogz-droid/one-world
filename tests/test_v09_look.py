@@ -73,27 +73,25 @@ def fresh(tmp_path, poses=None):
     return world, wc, mc
 
 
-def place(world, actor, x, y, at="t", presence=None):
+def place(world, actor, x, y, at="t"):
     return propose_place(world, actor=actor, object_id="lighter-1", x_cm=x,
-                         y_cm=y, presence=presence or PRESENT_WITHOUT_AVA,
-                         location=ROOM, occurred_at=at)
+                         y_cm=y, location=ROOM, occurred_at=at)
 
 
-def pickup(world, actor, at="t", presence=None):
+def pickup(world, actor, at="t"):
     return propose_pickup(world, actor=actor, object_id="lighter-1",
-                          presence=presence or ALL_THREE, location=ROOM,
+                          location=ROOM,
                           occurred_at=at)
 
 
-def look(world, actor, at="t", presence=None):
-    return propose_look(world, actor=actor, presence=presence or ALL_THREE,
-                        location=ROOM, occurred_at=at)
+def look(world, actor, at="t"):
+    return propose_look(world, actor=actor, location=ROOM, occurred_at=at)
 
 
 def move(world, actor, pose, at="t"):
     return propose_move(world, actor=actor, to_x_cm=pose[0], to_y_cm=pose[1],
                         facing_x=pose[2], facing_y=pose[3],
-                        presence=ALL_THREE, location=ROOM, occurred_at=at)
+                        location=ROOM, occurred_at=at)
 
 
 def derive(world, mc):
@@ -187,7 +185,7 @@ def test_the_lighter_may_also_appear_after_she_is_already_standing_there(tmp_pat
     seed_ava(world)
     world.add_wall("w-hide", 175, -50, 175, 50)   # between Ava and the drop
 
-    assert place(world, "warren", *LIGHTER, at="t1", presence=ALL_THREE).accepted
+    assert place(world, "warren", *LIGHTER, at="t1").accepted
     history = derive(world, mc)
     assert history.recall("ava") == [], "the wall did not hide the placing"
 
@@ -272,8 +270,7 @@ def test_rotating_then_looking_is_the_documented_route(tmp_path):
 def test_a_wall_divides_two_stationary_lookers(tmp_path):
     world, wc, mc = fresh(tmp_path, poses={
         "warren": (40, 0, 1, 0), "noah": NOAH_STATION})
-    assert place(world, "warren", *LIGHTER, at="t1",
-                 presence=["warren", "noah"]).accepted
+    assert place(world, "warren", *LIGHTER, at="t1").accepted
     seed_ava(world)
     world.add_wall(*BLOCKING_WALL)
 
@@ -297,18 +294,17 @@ def test_noah_learns_it_by_looking_again_with_no_move_at_all(tmp_path):
     """The v0.8 limitation lifted: v0.8 needed another MOVE for a new scan."""
     world, wc, mc = fresh(tmp_path, poses={
         "warren": (40, 0, 1, 0), "noah": NOAH_STATION})
-    assert place(world, "warren", *LIGHTER, at="t1",
-                 presence=["warren", "noah"]).accepted
+    assert place(world, "warren", *LIGHTER, at="t1").accepted
     world.add_wall(*BLOCKING_WALL)
 
-    assert look(world, "noah", at="t2", presence=["warren", "noah"]).accepted
+    assert look(world, "noah", at="t2").accepted
     history = derive(world, mc)
     assert sightings(history, "noah") == []
     first_scan = "scan-000001"
 
     world.remove_wall(BLOCKING_WALL[0])
     pose_before = world.current_pose("noah")
-    assert look(world, "noah", at="t3", presence=["warren", "noah"]).accepted
+    assert look(world, "noah", at="t3").accepted
     history = derive(world, mc)
 
     seen = sightings(history, "noah")
@@ -328,10 +324,9 @@ def test_removing_the_wall_alone_still_gives_nothing(tmp_path):
     """Demolition is not perception, and v0.9 does not make it one."""
     world, wc, mc = fresh(tmp_path, poses={
         "warren": (40, 0, 1, 0), "noah": NOAH_STATION})
-    assert place(world, "warren", *LIGHTER, at="t1",
-                 presence=["warren", "noah"]).accepted
+    assert place(world, "warren", *LIGHTER, at="t1").accepted
     world.add_wall(*BLOCKING_WALL)
-    assert look(world, "noah", at="t2", presence=["warren", "noah"]).accepted
+    assert look(world, "noah", at="t2").accepted
     derive(world, mc)
 
     world.remove_wall(BLOCKING_WALL[0])
@@ -436,7 +431,7 @@ def test_the_second_look_records_the_new_position_and_leaves_the_first(tmp_path)
     # Warren takes it and puts it down elsewhere. Ava still has not moved.
     assert pickup(world, "warren", at="t3").accepted
     assert move(world, "warren", (160, 0, 1, 0), at="t4").accepted
-    assert place(world, "warren", *p2, at="t5", presence=ALL_THREE).accepted
+    assert place(world, "warren", *p2, at="t5").accepted
     assert world.current_pose("ava") == AVA_STATION
 
     assert look(world, "ava", at="t6").accepted
@@ -655,8 +650,7 @@ def test_canonical_history_never_says_what_she_saw(tmp_path):
 def test_a_rejected_look_leaves_nothing(tmp_path, describe, actor, expected):
     world, wc, mc = fresh(tmp_path)          # Ava deliberately not seeded
     before = physical_state(wc)
-    result = propose_look(world, actor=actor, presence=PRESENT_WITHOUT_AVA,
-                          location=ROOM, occurred_at="t")
+    result = propose_look(world, actor=actor, location=ROOM, occurred_at="t")
     assert not result.accepted and result.reason == expected, describe
     assert physical_state(wc) == before
     assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 0
@@ -672,8 +666,7 @@ def test_look_cannot_be_forged_through_commit_event(tmp_path):
     assert "LOOK" in STATE_CHANGING_KINDS
     with pytest.raises(ValueError, match="cannot be appended directly"):
         world.commit_event(kind="LOOK", location=ROOM, actor_id="ava",
-                           payload={"actor": "ava"}, presence=ALL_THREE,
-                           event_x_cm=0, event_y_cm=0, occurred_at="t")
+                           payload={"actor": "ava"}, event_x_cm=0, event_y_cm=0, occurred_at="t")
     assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 0
     assert wc.execute("SELECT COUNT(*) FROM arrival_scan").fetchone()[0] == 0
 

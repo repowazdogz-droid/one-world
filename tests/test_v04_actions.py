@@ -58,7 +58,7 @@ def fresh(tmp_path, holder="warren"):
 def offer(world, **kw):
     """Just the attempt. Possession does not move."""
     base = dict(actor="warren", receiver="ava", object_id="lighter-1",
-                presence=ALL_THREE, location=ROOM, occurred_at="0001-01-01T00:00:00Z")
+                location=ROOM, occurred_at="0001-01-01T00:00:00Z")
     return attempt_give(world, **{**base, **kw})
 
 
@@ -74,12 +74,12 @@ def give(world, **kw):
         return made
     return respond_to_attempt(
         world, attempt_id=made.attempt_id, responder=receiver, response="ACCEPT",
-        presence=ALL_THREE, location=ROOM, occurred_at="0001-01-01T00:00:01Z")
+        location=ROOM, occurred_at="0001-01-01T00:00:01Z")
 
 
 def stow(world, **kw):
     base = dict(actor="ava", object_id="lighter-1", place="jacket pocket",
-                presence=ALL_THREE, location=ROOM, occurred_at="0001-01-01T00:02:00Z")
+                location=ROOM, occurred_at="0001-01-01T00:02:00Z")
     return propose_stow(world, **{**base, **kw})
 
 
@@ -108,8 +108,7 @@ def test_commit_event_refuses_state_changing_kinds(tmp_path):
         with pytest.raises(ValueError, match="cannot be appended directly"):
             world.commit_event(
                 kind=kind, location=ROOM, actor_id="warren",
-                payload={"anything": "at all"}, presence=ALL_THREE,
-                event_x_cm=0, event_y_cm=0, occurred_at="t")
+                payload={"anything": "at all"}, event_x_cm=0, event_y_cm=0, occurred_at="t")
     assert wc.execute("SELECT COUNT(*) FROM world_event").fetchone()[0] == 0
 
 
@@ -169,7 +168,7 @@ def test_give_transfers_possession_only_after_the_receiver_accepts(tmp_path):
 
     result = respond_to_attempt(
         world, attempt_id=made.attempt_id, responder="ava", response="ACCEPT",
-        presence=ALL_THREE, location=ROOM, occurred_at="t")
+        location=ROOM, occurred_at="t")
     assert result.accepted and result.event_id == "evt-000001"
 
     assert world.object_location("lighter-1")["holder_id"] == "ava"
@@ -215,36 +214,28 @@ def test_an_object_cannot_be_held_by_two_beings(tmp_path):
     [
         ("noah gives what ava holds",
          lambda w: attempt_give(w, actor="noah", receiver="warren",
-                                object_id="lighter-1", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t"), NOT_POSSESSED),
+                                object_id="lighter-1", location=ROOM, occurred_at="t"), NOT_POSSESSED),
         ("warren gives it twice",
          lambda w: attempt_give(w, actor="warren", receiver="noah",
-                                object_id="lighter-1", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t"), NOT_POSSESSED),
+                                object_id="lighter-1", location=ROOM, occurred_at="t"), NOT_POSSESSED),
         ("nonexistent object",
          lambda w: attempt_give(w, actor="ava", receiver="noah",
-                                object_id="ghost-9", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t"), UNKNOWN_OBJECT),
+                                object_id="ghost-9", location=ROOM, occurred_at="t"), UNKNOWN_OBJECT),
         ("nonexistent receiver",
          lambda w: attempt_give(w, actor="ava", receiver="nobody",
-                                object_id="lighter-1", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t"), UNKNOWN_RECEIVER),
+                                object_id="lighter-1", location=ROOM, occurred_at="t"), UNKNOWN_RECEIVER),
         ("nonexistent actor",
          lambda w: attempt_give(w, actor="nobody", receiver="ava",
-                                object_id="lighter-1", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t"), UNKNOWN_ACTOR),
+                                object_id="lighter-1", location=ROOM, occurred_at="t"), UNKNOWN_ACTOR),
         ("giving to yourself",
          lambda w: attempt_give(w, actor="ava", receiver="ava",
-                                object_id="lighter-1", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t"), SELF_GIVE),
+                                object_id="lighter-1", location=ROOM, occurred_at="t"), SELF_GIVE),
         ("stowing what you do not hold",
          lambda w: propose_stow(w, actor="noah", object_id="lighter-1",
-                                place="pocket", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t"), NOT_POSSESSED),
+                                place="pocket", location=ROOM, occurred_at="t"), NOT_POSSESSED),
         ("stowing a nonexistent object",
          lambda w: propose_stow(w, actor="ava", object_id="ghost-9",
-                                place="pocket", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t"), UNKNOWN_OBJECT),
+                                place="pocket", location=ROOM, occurred_at="t"), UNKNOWN_OBJECT),
     ],
 )
 def test_rejected_action_leaves_no_trace(tmp_path, describe, call, expected_reason):
@@ -285,8 +276,7 @@ def test_rejections_do_not_consume_world_seq(tmp_path):
     world, wc, _ = fresh(tmp_path)
     for _ in range(5):
         assert not attempt_give(world, actor="noah", receiver="ava",
-                                object_id="lighter-1", presence=ALL_THREE,
-                                location=ROOM, occurred_at="t").accepted
+                                object_id="lighter-1", location=ROOM, occurred_at="t").accepted
     assert give(world).accepted
     assert wc.execute("SELECT world_seq FROM world_event").fetchone()[0] == 0
 
@@ -320,7 +310,7 @@ def test_failure_inside_the_transaction_rolls_back_state_and_history(tmp_path, m
     with pytest.raises(RuntimeError, match="exploded"):
         respond_to_attempt(
             world, attempt_id=made.attempt_id, responder="ava", response="ACCEPT",
-            presence=ALL_THREE, location=ROOM, occurred_at="t")
+            location=ROOM, occurred_at="t")
 
     after = canonical_snapshot(wc)
     assert after == before, "partial work survived a failed action"
@@ -336,7 +326,7 @@ def test_the_injection_would_otherwise_have_written(tmp_path):
     before = canonical_snapshot(wc)
     assert respond_to_attempt(
         world, attempt_id=made.attempt_id, responder="ava", response="ACCEPT",
-        presence=ALL_THREE, location=ROOM, occurred_at="t").accepted
+        location=ROOM, occurred_at="t").accepted
     snap = canonical_snapshot(wc)
     assert len(snap["world_event"]) == len(before["world_event"]) + 1
     assert len(snap["world_pose"]) == len(before["world_pose"]) + 3
