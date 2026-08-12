@@ -87,7 +87,11 @@ def snapshot(wc):
     return {t: rows(t) for t in (
         "object_location", "being_pose", "world_event", "world_pose",
         "world_observation", "world_presence", "projection_outbox",
-        "world_seq_counter")}
+        "world_seq_counter",
+        # v0.8 canonical state. Defence in depth: no probe showed these
+        # changing a verdict here, since only a MOVE creates a scan and the
+        # world_event columns already catch a stray one.
+        "arrival_scan", "arrival_sighting", "arrival_scan_outbox")}
 
 
 def kinds(wc):

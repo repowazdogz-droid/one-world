@@ -352,6 +352,87 @@ Objects are perceived only through the PLACE and PICKUP *events* — there is no
 continuous observation, so walking into a room does not tell you what is lying
 in it. Nobody may refuse or contest a pickup; v0.5's consent covers GIVE only.
 
+## v0.8: perceiving state that was already there
+
+Through v0.7 perception was **event-only**. A character learned that a lighter
+existed by witnessing the PLACE that put it down. If Warren dropped it yesterday
+and Ava walked in today, Ava learned nothing — the lighter was canonically real
+and epistemically invisible to her.
+
+v0.8 adds the second source. There are now two ways to come to know something,
+and neither is derived from the other:
+
+```
+source='EVENT'   "I saw Warren put something down."
+source='STATE'   "I can see a red lighter lying there."
+```
+
+Both may be true; either may be true alone. Seeing the lighter now does **not**
+retroactively mean Ava saw it being placed, and witnessing a PLACE does not
+require the object to still be there.
+
+**The trigger is a successful MOVE, and nothing else.** No clock, no tick, no
+background sensing, no LOOK action. Standing still never rescans.
+
+**The two halves of a move are perceived from opposite ends of it.** This is the
+part that looks tidy to get wrong:
+
+```
+BEFORE state
+   MOVE event ......... perceived by everyone, from the DEPARTURE snapshot
+canonical pose transition
+   arrival scan ....... perceived by the mover alone, from the ARRIVAL pose
+```
+
+v0.6's rule is untouched: observers still see the mover where they set off from.
+The arrival scan needs the pose *after* the transition, which `world_pose` does
+not hold and must not be asked to — so an arrival gets its own snapshot.
+
+**What is sensed.** Placed objects only. Not held or stowed objects, not other
+beings, not walls-as-memories, not rooms. Range, facing cone and occlusion are
+the *same* `_visual_grade` used for events — one implementation, so the two
+cannot drift into two different physics. CLEAR gives `{object, at}`; COARSE
+gives `{object: "something"}`, with identity and position destroyed at write.
+
+**Looking is not an event.** No LOOK is appended, and canonical history never
+records "Ava saw a red lighter". That is her memory, not world truth. A scan
+takes the MOVE's own `world_seq` rather than consuming one, so the canonical
+event log stays dense.
+
+**Crash consistency.** The MOVE transaction persists the arrival pose *and* each
+sighting's grade, description and position. `load_scan` reads only those
+immutable tables — never `object_location`, `wall`, or `being_pose` — so a scan
+projected after a crash, after the lighter has been carried off and a wall built
+across the sight line, still yields what Ava saw when she arrived.
+
+**Identity and repetition.** A memory is keyed on the *observation*, never the
+subject. Two arrivals are two sightings and become two memories; one arrival
+replayed is one sighting and stays one memory. `UNIQUE (character_id,
+origin_ref)` makes the duplicate inexpressible rather than merely avoided.
+Sighting ids are opaque (`sig-000001-000`) precisely so a coarse observer's
+`origin_ref` column cannot leak an object id that the content withheld.
+
+**Accepted v0.8 limitations.** Observation is discrete and arrival-only: an
+object placed in front of a standing character is not noticed until they next
+move. Only placed objects are observable — no perceiving people, containers or
+structure as persistent state. There is no object permanence, no belief
+revision, no forgetting, no confidence, and no reconciliation between an old
+sighting and a new one: if Ava saw the lighter at P1 and later at P2, she holds
+two memories and the world never tells her they are the same lighter. A coarse
+sighting yields no fuzzy position at all. Nothing models memory of where you
+yourself left something — state sensing has no agency shortcut, so your own
+pocket is as invisible as anyone else's.
+
+*Migration asymmetry (technical debt).* A `minds.db` created fresh under v0.8
+enforces `source IN ('EVENT','STATE')` with a SQLite CHECK. A pre-v0.8 store
+migrated by `init_minds` gets the column and its `DEFAULT 'EVENT'`, but SQLite
+cannot attach the equivalent CHECK through a simple `ALTER TABLE ADD COLUMN`,
+so a migrated store has **weaker schema-level enforcement** than a fresh one. In
+both cases every production write goes through the single perception writer,
+which emits only `EVENT` or `STATE` — but that is code-level, not schema-level,
+and a raw INSERT into a migrated store could write a third value. Rebuilding the
+table to attach the constraint is deliberately deferred, not overlooked.
+
 ## Accepted v0.1 limitation: an unprojectable event wedges the queue
 
 Projection fails closed. If `project()` raises for a committed event — an

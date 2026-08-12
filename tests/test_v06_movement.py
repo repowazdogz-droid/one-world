@@ -72,7 +72,14 @@ def snapshot(wc):
         return sorted(tuple(r) for r in wc.execute(f"SELECT * FROM {t}"))
     return {t: rows(t) for t in (
         "being_pose", "world_event", "world_pose", "world_observation",
-        "world_presence", "projection_outbox", "world_seq_counter")}
+        "world_presence", "projection_outbox", "world_seq_counter",
+        # v0.8 canonical state. DEFENCE IN DEPTH, not a new detection: probed
+        # with a mutant where a rejected move records a scan anyway, these
+        # columns changed no verdict, because arrival_scan.event_id references
+        # world_event and a scan with no event is already inexpressible. They
+        # are listed so the helper stays honest about covering ALL canonical
+        # state, and would start discriminating if that FK ever loosened.
+        "arrival_scan", "arrival_sighting", "arrival_scan_outbox")}
 
 
 # -- the pose bypass is closed -------------------------------------------

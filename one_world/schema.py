@@ -207,6 +207,79 @@ CREATE TRIGGER IF NOT EXISTS world_observation_no_delete
 BEFORE DELETE ON world_observation
 BEGIN SELECT RAISE(ABORT, 'world_observation is append-only'); END;
 
+-- IMMUTABLE arrival snapshot: WHERE an inhabitant ended up after a MOVE.
+--
+-- This is NOT world_pose. world_pose is the event-time snapshot and, for a
+-- MOVE, deliberately records the DEPARTURE (see propose_move). Arrival sensing
+-- needs the pose AFTER the transition, which no existing table holds, so it
+-- gets its own row rather than a reinterpretation of an existing one.
+--
+-- One scan per successful MOVE: world_seq and event_id are the MOVE's own, so
+-- an arrival is anchored to the canonical history that caused it and needs no
+-- clock of its own. A scan row exists even when nothing was visible -- "Noah
+-- arrived and saw nothing" is a historical fact, not an absence of one.
+CREATE TABLE IF NOT EXISTS arrival_scan (
+    scan_id    TEXT PRIMARY KEY,
+    world_seq  INTEGER NOT NULL UNIQUE,
+    event_id   TEXT NOT NULL UNIQUE REFERENCES world_event(event_id),
+    being_id   TEXT NOT NULL REFERENCES being(being_id),
+    x_cm       INTEGER NOT NULL,          -- ARRIVAL pose, not departure
+    y_cm       INTEGER NOT NULL,
+    facing_x   INTEGER NOT NULL,
+    facing_y   INTEGER NOT NULL,
+    CHECK (facing_x != 0 OR facing_y != 0)
+);
+
+CREATE TRIGGER IF NOT EXISTS arrival_scan_no_update
+BEFORE UPDATE ON arrival_scan
+BEGIN SELECT RAISE(ABORT, 'arrival_scan is immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS arrival_scan_no_delete
+BEFORE DELETE ON arrival_scan
+BEGIN SELECT RAISE(ABORT, 'arrival_scan is append-only'); END;
+
+-- IMMUTABLE record of one object seen during one arrival scan, at the fidelity
+-- the geometry allowed. Absent row == that object was not visible from there.
+--
+-- `description` and `x_cm/y_cm` are SNAPSHOTTED, not looked up later. The
+-- object may be picked up, moved, or carried away long before these rows are
+-- projected into anyone's memory; what Ava saw is what was there when she
+-- arrived. This is the same reasoning as world_pose and world_wall, applied to
+-- present-state perception instead of event perception.
+--
+-- `sighting_id` is the perception's origin identity and is deliberately OPAQUE:
+-- it embeds the scan and an index, never the object_id. A COARSE observer's
+-- perception row carries this string, so an id built from object_id would leak
+-- canonical identity through a structural column while the content stayed
+-- clean.
+CREATE TABLE IF NOT EXISTS arrival_sighting (
+    sighting_id  TEXT PRIMARY KEY,
+    scan_id      TEXT NOT NULL REFERENCES arrival_scan(scan_id),
+    object_id    TEXT NOT NULL REFERENCES object(object_id),
+    description  TEXT NOT NULL,           -- arrival-time canonical detail
+    grade        TEXT NOT NULL CHECK (grade IN ('CLEAR', 'COARSE')),
+    x_cm         INTEGER NOT NULL,        -- arrival-time position
+    y_cm         INTEGER NOT NULL,
+    UNIQUE (scan_id, object_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS arrival_sighting_no_update
+BEFORE UPDATE ON arrival_sighting
+BEGIN SELECT RAISE(ABORT, 'arrival_sighting is immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS arrival_sighting_no_delete
+BEFORE DELETE ON arrival_sighting
+BEGIN SELECT RAISE(ABORT, 'arrival_sighting is append-only'); END;
+
+-- Mutable projection bookkeeping for arrival scans, kept OUT of arrival_scan
+-- for exactly the reason projection_outbox is kept out of world_event: the
+-- fact is immutable, the bookkeeping is not.
+CREATE TABLE IF NOT EXISTS arrival_scan_outbox (
+    scan_id    TEXT PRIMARY KEY REFERENCES arrival_scan(scan_id),
+    world_seq  INTEGER NOT NULL UNIQUE,
+    state      TEXT NOT NULL CHECK (state IN ('PENDING', 'DONE'))
+);
+
 -- Mutable projection bookkeeping, kept OUT of world_event so the fact itself
 -- stays immutable. Written in the same transaction as the event.
 CREATE TABLE IF NOT EXISTS projection_outbox (
@@ -222,9 +295,27 @@ CREATE TABLE IF NOT EXISTS world_seq_counter (
 """
 
 MINDS_DDL = """
--- One row per (character, event they perceived). perceived_json holds the
+-- One row per thing a character perceived. perceived_json holds the
 -- ALREADY-REDUCED payload: information the character did not perceive is never
 -- written here, rather than written and filtered at read time.
+--
+-- v0.8 -- TWO EPISTEMIC SOURCES, ONE HISTORY.
+--
+--   source='EVENT'  something HAPPENED while the character had physical access
+--                   to it. origin_ref is the canonical event_id.
+--   source='STATE'  something WAS ALREADY THERE when the character arrived and
+--                   looked. origin_ref is an opaque arrival_sighting id.
+--
+-- They share one table and one perception_seq deliberately: a character has a
+-- single remembered order, and "I saw Warren put something down" and "I can see
+-- a red lighter lying there" are both memories in it. They are NOT collapsed
+-- into each other -- `source` is what keeps them distinguishable, and neither
+-- is ever derived from the other.
+--
+-- UNIQUE (character_id, origin_ref) is what makes retry idempotent, and it is
+-- deliberately keyed on ORIGIN rather than on subject: two scans of the same
+-- lighter are two different origins and therefore two different memories, while
+-- a replay of one scan is the same origin and therefore the same memory.
 CREATE TABLE IF NOT EXISTS perception (
     perception_id   TEXT PRIMARY KEY,
     character_id    TEXT NOT NULL,
@@ -233,6 +324,8 @@ CREATE TABLE IF NOT EXISTS perception (
     grade           TEXT NOT NULL,
     perceived_json  TEXT NOT NULL,
     origin_ref      TEXT NOT NULL,      -- opaque canonical id; audit only
+    source          TEXT NOT NULL DEFAULT 'EVENT'
+                    CHECK (source IN ('EVENT', 'STATE')),
     UNIQUE (character_id, perception_seq),
     UNIQUE (character_id, origin_ref)   -- makes retry idempotent
 );
@@ -272,3 +365,27 @@ def init_world(conn: sqlite3.Connection) -> None:
 def init_minds(conn: sqlite3.Connection) -> None:
     with conn:
         conn.executescript(MINDS_DDL)
+        _migrate_perception_source(conn)
+
+
+def _migrate_perception_source(conn: sqlite3.Connection) -> None:
+    """Give a pre-v0.8 perception store the `source` column it now needs.
+
+    Every row such a store holds is event-derived BY CONSTRUCTION -- state
+    observation did not exist before v0.8 and there was no code path that could
+    have written one -- so 'EVENT' is a true statement about them, not a
+    default chosen for convenience.
+
+    HONEST LIMIT: ALTER TABLE ADD COLUMN cannot add the CHECK constraint, so a
+    migrated store enforces the domain by the column default and the writing
+    code only, where a store created fresh under v0.8 enforces it in the
+    schema. Both reject the value at the point that matters -- the write -- but
+    they are not equally strong, and a raw INSERT into a migrated store could
+    write a third source value.
+    """
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(perception)")}
+    if "source" not in columns:
+        conn.execute(
+            "ALTER TABLE perception ADD COLUMN source TEXT NOT NULL "
+            "DEFAULT 'EVENT'"
+        )

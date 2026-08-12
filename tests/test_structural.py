@@ -50,7 +50,11 @@ def test_minds_module_imports_only_stdlib():
 def test_minds_module_names_no_canonical_table_or_file():
     """No code path in character-facing code references canonical storage."""
     for token in ("world_event", "world_presence", "world_observation",
-                  "projection_outbox", "world.db", "ATTACH"):
+                  "projection_outbox", "world.db", "ATTACH",
+                  # v0.8 canonical tables. State observation gave character
+                  # memory a second origin, and this is what keeps recall from
+                  # dereferencing it back into canonical truth.
+                  "arrival_scan", "arrival_sighting", "object_location"):
         assert token not in MINDS_SRC, f"canonical reference {token!r} in minds.py"
 
 

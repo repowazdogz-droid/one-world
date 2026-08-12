@@ -315,6 +315,17 @@ def propose_move(
 
     The payload records from, to and facing at commit time. Nothing later
     re-derives where a past move went by consulting today's pose.
+
+    v0.8 -- ARRIVAL. Once the transition has been applied, the mover senses what
+    is PRESENT from where they now stand, and that scan is snapshotted in this
+    same transaction. The two halves of a move are therefore perceived from
+    OPPOSITE ends of it, and deliberately so:
+
+        MOVE event      perceived by everyone, from the DEPARTURE snapshot
+        arrival scan    perceived by the mover alone, from the ARRIVAL pose
+
+    A successful MOVE is the only trigger. Standing still rescans nothing, there
+    is no clock, and there is no background sensing.
     """
     with world.transaction():
         if not world.being_exists(actor):
@@ -342,6 +353,12 @@ def propose_move(
         )
         # ...then the transition the event explains.
         world._move_pose(actor, to_x_cm, to_y_cm, facing_x, facing_y)
+        # ...and only now, from where the actor actually is, what is there.
+        world._record_arrival_scan(
+            event_id=event_id,
+            world_seq=int(event_id.split("-")[1]),
+            being_id=actor,
+        )
     return ActionResult(accepted=True, event_id=event_id)
 
 

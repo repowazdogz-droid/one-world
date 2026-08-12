@@ -90,7 +90,12 @@ def canonical_snapshot(conn):
     return {t: rows(t) for t in (
         "object_location", "world_event", "world_pose", "world_wall",
         "world_observation", "world_presence", "projection_outbox",
-        "world_seq_counter")}
+        "world_seq_counter",
+        # v0.8 canonical state, so "everything an action could have touched"
+        # keeps meaning everything rather than everything that existed in v0.4.
+        # Defence in depth: no v0.4 action creates a scan, so this is coverage
+        # of the claim, not a demonstrated new detection.
+        "arrival_scan", "arrival_sighting", "arrival_scan_outbox")}
 
 
 # -- the authority boundary ----------------------------------------------

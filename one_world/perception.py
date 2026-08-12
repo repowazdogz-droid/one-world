@@ -87,6 +87,20 @@ def _stow_clear(p: dict) -> dict:
     return {"actor": p["actor"], "object": p["object"], "place": p["place"]}
 
 
+def _sighting_clear(p: dict) -> dict:
+    # "I can see a red lighter lying at (100, 0)." Note what is NOT here: no
+    # actor, no cause, no history. Seeing a thing tells you it is there, not how
+    # it got there or who put it down.
+    return {"object": p["object"], "at": p["at"]}
+
+
+def _sighting_coarse(p: dict) -> dict:
+    # "I can see something lying there." Identity and position are DESTROYED
+    # here, not hidden: too far to tell what it is, and v0.8 deliberately does
+    # not invent a fuzzy position to stand in for the exact one.
+    return {"object": "something"}
+
+
 _PROJECTIONS: dict[tuple[str, str], Callable[[dict], dict]] = {
     ("GIVE", "CLEAR"): _give_clear,
     ("GIVE", "COARSE"): _give_coarse,
@@ -101,7 +115,20 @@ _PROJECTIONS: dict[tuple[str, str], Callable[[dict], dict]] = {
     ("PLACE", "COARSE"): _place_coarse,
     ("PICKUP", "CLEAR"): _pickup_clear,
     ("PICKUP", "COARSE"): _pickup_coarse,
+    # v0.8: not an event kind. SIGHTING is the reduction of PRESENT STATE, and
+    # it goes through the same fail-closed dispatch as everything else.
+    ("SIGHTING", "CLEAR"): _sighting_clear,
+    ("SIGHTING", "COARSE"): _sighting_coarse,
 }
+
+#: The perception store's two epistemic sources. See MINDS_DDL.
+EVENT = "EVENT"
+STATE = "STATE"
+
+#: What a state observation is called in a character's history. Deliberately
+#: NOT an event kind: nothing of this kind exists in world_event, and no
+#: canonical history anywhere says "Ava looked".
+SIGHTING = "SIGHTING"
 
 
 def project(kind: str, payload: dict, grade: str) -> dict:
@@ -155,37 +182,108 @@ class PerceptionRouter:
         )
         return seq
 
+    def _pending_units(self) -> list[tuple[int, int, str]]:
+        """Everything still owing perceptions, in ONE canonical order.
+
+        Two kinds of pending work now exist, and they must drain into a single
+        per-character memory order rather than two interleaved-by-accident ones.
+        The sort key is (world_seq, class), where an EVENT sorts before a SCAN
+        at the same seq -- which is exactly the temporal truth of a MOVE: the
+        departure is perceived, then the inhabitant arrives and looks.
+
+        Ordering is explicit here and nowhere else. Not rowid, not insertion
+        order, not a timestamp.
+        """
+        units = [(int(r["world_seq"]), 0, r["event_id"])
+                 for r in self._world.pending_projections()]
+        units += [(int(r["world_seq"]), 1, r["scan_id"])
+                  for r in self._world.pending_scans()]
+        units.sort()
+        return units
+
     def derive_pending(self) -> int:
-        """Apply every PENDING event in canonical order. Returns rows written."""
+        """Apply every PENDING unit in canonical order. Returns rows written."""
         written = 0
-        for row in self._world.pending_projections():
-            event = self._world.load_event(row["event_id"])
-            written += self._derive_one(event)
-            # Marked DONE only after its perceptions are durably committed.
-            self._world.mark_projected(event["event_id"])
+        for _seq, kind_rank, ref in self._pending_units():
+            if kind_rank == 0:
+                written += self._derive_one(self._world.load_event(ref))
+                # Marked DONE only after its perceptions are durably committed.
+                self._world.mark_projected(ref)
+            else:
+                written += self._derive_scan(self._world.load_scan(ref))
+                self._world.mark_scan_projected(ref)
         return written
 
+    def _write(self, *, character_id: str, kind: str, grade: str,
+               perceived: dict, origin_ref: str, source: str) -> None:
+        """The ONE statement that writes a memory. Both sources come through it.
+
+        `perceived` has ALREADY been reduced by `project` before it arrives
+        here -- this method never sees a canonical payload, and there is no
+        second, unreduced write path for the new source to sneak in through.
+        """
+        self._minds.execute(
+            "INSERT INTO perception (perception_id, character_id, perception_seq, "
+            "kind, grade, perceived_json, origin_ref, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"{origin_ref}:{character_id}",  # deterministic identity
+                character_id,
+                self._next_perception_seq(character_id),
+                kind,
+                grade,
+                _dumps(perceived),
+                origin_ref,
+                source,
+            ),
+        )
+
     def _derive_one(self, event: dict) -> int:
+        """EVENT-derived perception: something happened while you had access."""
         origin_ref = event["event_id"]
         written = 0
         with self._minds:
             for character_id, grade in sorted(event["observations"].items()):
                 if self._already_perceived(character_id, origin_ref):
                     continue  # crash-after-write, before-DONE: skip, do not duplicate
-                perceived = project(event["kind"], event["payload"], grade)
-                seq = self._next_perception_seq(character_id)
-                self._minds.execute(
-                    "INSERT INTO perception (perception_id, character_id, perception_seq, "
-                    "kind, grade, perceived_json, origin_ref) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        f"{origin_ref}:{character_id}",  # deterministic identity
-                        character_id,
-                        seq,
-                        event["kind"],
-                        grade,
-                        _dumps(perceived),
-                        origin_ref,
-                    ),
+                self._write(
+                    character_id=character_id,
+                    kind=event["kind"],
+                    grade=grade,
+                    perceived=project(event["kind"], event["payload"], grade),
+                    origin_ref=origin_ref,
+                    source=EVENT,
+                )
+                written += 1
+        return written
+
+    def _derive_scan(self, scan: dict) -> int:
+        """STATE-derived observation: something was already there when you looked.
+
+        Every input comes from `scan`, which the canonical store assembled from
+        the immutable arrival record. Nothing here consults present-day object
+        positions, walls or poses, so a scan projected minutes or restarts late
+        yields the observation the arrival itself would have.
+
+        Identity is the SIGHTING, not the object. Two scans of one lighter are
+        two origins and become two memories; one scan replayed is one origin and
+        stays one memory.
+        """
+        character_id = scan["being_id"]
+        written = 0
+        with self._minds:
+            for sighting in scan["sightings"]:
+                origin_ref = sighting["sighting_id"]
+                if self._already_perceived(character_id, origin_ref):
+                    continue
+                self._write(
+                    character_id=character_id,
+                    kind=SIGHTING,
+                    grade=sighting["grade"],
+                    perceived=project(SIGHTING, sighting["payload"],
+                                      sighting["grade"]),
+                    origin_ref=origin_ref,
+                    source=STATE,
                 )
                 written += 1
         return written

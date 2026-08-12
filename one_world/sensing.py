@@ -54,6 +54,29 @@ AUDIO_RANGE_CM = {
 }
 
 
+def _visual_grade(ox, oy, fx, fy, tx, ty, walls):
+    """CLEAR / COARSE / None for looking at the point (tx, ty) from a pose.
+
+    The WHOLE of the visual model, and the single implementation of it. Event
+    sensing and arrival-state sensing both come through here, so "can Ava see
+    the lighter lying there" is decided by exactly the same range, cone and
+    occlusion rules as "can Ava see Warren put it down". Two copies of this
+    could drift apart into two different physics; one cannot.
+    """
+    dsq = geometry.dist_sq(ox, oy, tx, ty)
+    if dsq == 0:
+        return "CLEAR"  # standing on it; no direction to test
+    if dsq > VIEW_RANGE_CM * VIEW_RANGE_CM:
+        return None
+    if not geometry.in_facing_cone(ox, oy, fx, fy, tx, ty):
+        return None
+    if geometry.occluded_by_any(walls, ox, oy, tx, ty):
+        return None  # v0.3: solid structure between observer and target
+    if dsq <= DETAIL_RANGE_CM * DETAIL_RANGE_CM:
+        return "CLEAR"
+    return "COARSE"
+
+
 def _see(observer_id, actor_id, ox, oy, fx, fy, ex, ey, walls):
     if observer_id == actor_id:
         # CALIBRATION -- this is SELF / AGENCY knowledge in a deliberately small
@@ -63,18 +86,7 @@ def _see(observer_id, actor_id, ox, oy, fx, fy, ex, ey, walls):
         # actor at zero distance from their own event, where facing has no
         # meaning) has an explicit answer rather than an arithmetic accident.
         return "CLEAR"
-    dsq = geometry.dist_sq(ox, oy, ex, ey)
-    if dsq == 0:
-        return "CLEAR"  # standing on the event; no direction to test
-    if dsq > VIEW_RANGE_CM * VIEW_RANGE_CM:
-        return None
-    if not geometry.in_facing_cone(ox, oy, fx, fy, ex, ey):
-        return None
-    if geometry.occluded_by_any(walls, ox, oy, ex, ey):
-        return None  # v0.3: solid structure between observer and event
-    if dsq <= DETAIL_RANGE_CM * DETAIL_RANGE_CM:
-        return "CLEAR"
-    return "COARSE"
+    return _visual_grade(ox, oy, fx, fy, ex, ey, walls)
 
 
 def _hear(observer_id, actor_id, ox, oy, sx, sy, audio_mode):
@@ -143,3 +155,39 @@ def sense_event(
         }
 
     return {b: g for b, g in graded.items() if g is not None}
+
+
+def sense_state(
+    *,
+    observer_pose: tuple[int, int, int, int],
+    objects: tuple,
+    walls: tuple,
+) -> dict[str, str]:
+    """Derive {object_id: grade} for objects LYING IN THE WORLD right now.
+
+    This is the second epistemic source, and it is deliberately NOT sense_event:
+
+      * There is no actor and therefore NO AGENCY SHORTCUT. An object you own,
+        or put down yourself, is invisible from across a wall like any other.
+        Knowing where you left something is memory, not sight, and v0.8 does
+        not model it.
+      * There is no modality table. Objects lying on the ground do not make a
+        sound, so state sensing is visual and only visual.
+
+    `objects` is a sequence of (object_id, x_cm, y_cm) -- PLACED objects only.
+    Held and stowed objects are not passed in, and this function has no way to
+    ask about them.
+
+    Objects that were not visible are ABSENT from the result, matching the
+    convention that a missing row means "did not perceive".
+
+    Pure and total over its inputs. `walls` is REQUIRED and has no default, for
+    the reason spelled out on sense_event: an omitted barrier set must not
+    silently become an asserted empty one.
+    """
+    ox, oy, fx, fy = observer_pose
+    graded = {
+        object_id: _visual_grade(ox, oy, fx, fy, x, y, walls)
+        for object_id, x, y in sorted(objects)
+    }
+    return {o: g for o, g in graded.items() if g is not None}

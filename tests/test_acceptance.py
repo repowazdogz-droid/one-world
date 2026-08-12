@@ -118,16 +118,23 @@ def test_order_survives_physical_row_reshuffle(restarted, tmp_path):
 
     conn = sqlite3.connect(shuffled)
     conn.row_factory = sqlite3.Row
+    # v0.8 note: `source` is carried through the round-trip below. That is
+    # PREVENTIVE, not a new detection -- this v0.1 scenario contains no state
+    # observations, so every row is 'EVENT' and the column default would have
+    # produced the same result. It would matter the moment a STATE row entered
+    # this scenario, which is exactly when a silent rewrite would be invisible.
     rows = [dict(r) for r in conn.execute("SELECT * FROM perception")]
     with conn:
         conn.execute("DELETE FROM perception")
         for row in reversed(rows):  # invert physical order, preserve seq
             conn.execute(
                 "INSERT INTO perception (perception_id, character_id, perception_seq, "
-                "kind, grade, perceived_json, origin_ref) VALUES (?,?,?,?,?,?,?)",
+                "kind, grade, perceived_json, origin_ref, source) "
+                "VALUES (?,?,?,?,?,?,?,?)",
                 tuple(row[k] for k in
                       ("perception_id", "character_id", "perception_seq",
-                       "kind", "grade", "perceived_json", "origin_ref")),
+                       "kind", "grade", "perceived_json", "origin_ref",
+                       "source")),
             )
     rowids = [r[0] for r in conn.execute("SELECT rowid FROM perception ORDER BY rowid")]
     seqs = [r[0] for r in conn.execute("SELECT perception_seq FROM perception ORDER BY rowid")]

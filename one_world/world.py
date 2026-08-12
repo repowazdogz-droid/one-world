@@ -10,7 +10,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Any
 
-from one_world.sensing import sense_event
+from one_world.sensing import sense_event, sense_state
 
 
 #: Kinds that change canonical world state. These may only be created through
@@ -155,6 +155,22 @@ class WorldStore:
             "WHERE object_id = ?",
             (object_id,),
         ).fetchone()
+
+    def placed_objects(self) -> list[tuple[str, str, int, int]]:
+        """Objects LYING IN THE WORLD now: (object_id, description, x, y).
+
+        Held and stowed objects are excluded by the WHERE clause, not by a
+        caller remembering to filter, so nothing can accidentally sense the
+        contents of someone's pockets.
+        """
+        return [
+            (r["object_id"], r["description"], r["x_cm"], r["y_cm"])
+            for r in self._conn.execute(
+                "SELECT o.object_id, o.description, l.x_cm, l.y_cm "
+                "FROM object_location l JOIN object o USING (object_id) "
+                "WHERE l.x_cm IS NOT NULL ORDER BY o.object_id"
+            )
+        ]
 
     def being_exists(self, being_id: str) -> bool:
         return self._conn.execute(
@@ -386,6 +402,132 @@ class WorldStore:
             (event_id, seq),
         )
         return event_id
+
+    # -- v0.8: arrival-state sensing -------------------------------------
+
+    def _record_arrival_scan(self, *, event_id: str, world_seq: int,
+                             being_id: str) -> str:
+        """Sense what is PRESENT from the pose a MOVE just arrived at.
+
+        The caller MUST already hold the action transaction, and MUST already
+        have applied the pose transition. Both halves matter:
+
+          * Same transaction, so a committed MOVE always leaves behind the
+            durable, authoritative inputs its arrival scan was computed from.
+            There is no window in which the world says Ava arrived but has
+            forgotten what she arrived to.
+
+          * AFTER the transition, because the pose this reads is the ARRIVAL
+            pose. It comes from current_pose -- the canonical present, which the
+            caller has just updated -- and NOT from the MOVE's world_pose
+            snapshot, which by design records the departure. Reusing world_pose
+            here would look tidy and be temporally wrong.
+
+        Object positions, descriptions and grades are SNAPSHOTTED into
+        arrival_sighting rather than left to be looked up when the perceptions
+        are eventually projected. That is what makes a delayed or retried
+        projection reproduce the observation an uninterrupted MOVE would have
+        produced, however much the world has moved on in the meantime.
+
+        A scan row is written even when nothing was visible: arriving and seeing
+        nothing is a fact, and a later scan must not be able to fill it in.
+
+        ORDERING: the scan takes the MOVE's OWN world_seq rather than consuming
+        a new one. A scan is not an event -- appending "Ava looked" to canonical
+        history would make an inhabitant's perception into world truth, which is
+        precisely the distinction this project exists to keep -- and burning
+        event sequence numbers on non-events would leave holes in a log whose
+        density is a v0.1 invariant. The MOVE is the canonical fact; the scan
+        hangs off it, and the drain breaks the tie by putting the event first.
+        """
+        seq = world_seq
+        scan_id = f"scan-{seq:06d}"  # deterministic; no UUID anywhere
+        pose = self.current_pose(being_id)     # ARRIVAL pose, post-transition
+        self._conn.execute(
+            "INSERT INTO arrival_scan "
+            "(scan_id, world_seq, event_id, being_id, x_cm, y_cm, facing_x, facing_y) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (scan_id, seq, event_id, being_id, *pose),
+        )
+
+        placed = self.placed_objects()
+        walls = tuple((x1, y1, x2, y2) for _, x1, y1, x2, y2 in self.current_walls())
+        grades = sense_state(
+            observer_pose=pose,
+            objects=tuple((oid, x, y) for oid, _desc, x, y in placed),
+            walls=walls,
+        )
+        for index, (object_id, description, x_cm, y_cm) in enumerate(
+            [p for p in placed if p[0] in grades]
+        ):
+            self._conn.execute(
+                "INSERT INTO arrival_sighting (sighting_id, scan_id, object_id, "
+                "description, grade, x_cm, y_cm) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (f"sig-{seq:06d}-{index:03d}", scan_id, object_id, description,
+                 grades[object_id], x_cm, y_cm),
+            )
+
+        self._conn.execute(
+            "INSERT INTO arrival_scan_outbox (scan_id, world_seq, state) "
+            "VALUES (?, ?, 'PENDING')",
+            (scan_id, seq),
+        )
+        return scan_id
+
+    def pending_scans(self) -> list[sqlite3.Row]:
+        """Arrival scans still owing observations, in canonical order."""
+        return list(
+            self._conn.execute(
+                "SELECT scan_id, world_seq FROM arrival_scan_outbox "
+                "WHERE state = 'PENDING' ORDER BY world_seq"
+            )
+        )
+
+    def mark_scan_projected(self, scan_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE arrival_scan_outbox SET state = 'DONE' WHERE scan_id = ?",
+                (scan_id,),
+            )
+
+    def load_scan(self, scan_id: str) -> dict:
+        """Replay one arrival scan, from the arrival-time record ALONE.
+
+        Every value returned here comes from arrival_scan or arrival_sighting,
+        both of which are immutable and were written inside the MOVE's own
+        transaction. This function reads NO mutable table -- not object_location,
+        not wall, not being_pose -- so it cannot substitute today's world for the
+        world the inhabitant actually arrived to. That property is the whole
+        point of snapshotting, and it is asserted structurally as well as
+        behaviourally in the v0.8 tests.
+        """
+        row = self._conn.execute(
+            "SELECT * FROM arrival_scan WHERE scan_id = ?", (scan_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(scan_id)
+        sightings = [
+            {
+                "sighting_id": r["sighting_id"],
+                "grade": r["grade"],
+                # The canonical payload of a sighting, assembled from the
+                # snapshot. The router reduces this before it reaches anyone.
+                "payload": {"object": r["description"], "at": [r["x_cm"], r["y_cm"]]},
+            }
+            for r in self._conn.execute(
+                "SELECT sighting_id, description, grade, x_cm, y_cm "
+                "FROM arrival_sighting WHERE scan_id = ? ORDER BY sighting_id",
+                (scan_id,),
+            )
+        ]
+        return {
+            "scan_id": row["scan_id"],
+            "world_seq": row["world_seq"],
+            "event_id": row["event_id"],
+            "being_id": row["being_id"],
+            "pose": (row["x_cm"], row["y_cm"], row["facing_x"], row["facing_y"]),
+            "sightings": sightings,
+        }
 
     # -- projection bookkeeping -----------------------------------------
 

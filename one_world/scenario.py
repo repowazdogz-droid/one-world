@@ -23,7 +23,8 @@ import sys
 
 from one_world import schema
 from one_world.actions import (
-    ACCEPT, attempt_give, propose_move, propose_stow, respond_to_attempt,
+    ACCEPT, attempt_give, propose_move, propose_pickup, propose_place,
+    propose_stow, respond_to_attempt,
 )
 from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
@@ -220,6 +221,39 @@ def social_answer(world: WorldStore, attempt_id: str, response: str,
                               location=ROOM, occurred_at=occurred_at)
 
 
+# ---------------------------------------------------------------------------
+# v0.8 scene: the lighter is ALREADY LYING THERE before Ava arrives.
+#
+#            y
+#      3000  A(0,3000)              Ava starts 30 m away: she cannot possibly
+#            .                      perceive the PLACE, at any facing.
+#         0  W(40,0)  [L(100,0)]  -> A'(250,0) facing -x
+#            .
+#     -3000  N(0,-3000)             Noah likewise perceives nothing.
+#
+# Warren is 60 cm from the drop point, so he can reach it. Ava's arrival pose is
+# 150 cm from the lighter and looking straight at it: inside DETAIL_RANGE_CM,
+# inside the cone, nothing in the way. Her CLEAR sighting is CAUSED by that
+# geometry -- no grade is written anywhere in this file.
+# ---------------------------------------------------------------------------
+
+ARRIVAL_POSES = {
+    "warren": (40, 0, 1, 0),
+    "ava": (0, 3000, 0, 1),
+    "noah": (0, -3000, 0, -1),
+}
+LIGHTER_LIES_AT = (100, 0)
+AVA_ARRIVAL = (250, 0, -1, 0)
+
+#: Built across Ava's line of sight AFTER she has already arrived and looked.
+LATE_WALL = ("w-late", 175, -50, 175, 50)
+
+
+def setup_arrival_scene(world: WorldStore) -> None:
+    for being_id, pose in sorted(ARRIVAL_POSES.items()):
+        world.seed_pose(being_id, *pose)
+
+
 def world_path(d: str) -> str:
     return os.path.join(d, "world.db")
 
@@ -383,6 +417,59 @@ def answer_phase(d: str, attempt_id: str | None, response: str) -> dict:
             "attempt_id": attempt_id, "outcome": result.outcome}
 
 
+def arrival_populate(d: str, crash_before_derive: bool) -> None:
+    """Place the lighter, THEN let Ava arrive. Optionally crash before deriving.
+
+    The PLACE is derived into memory before Ava moves, so at the moment she
+    arrives the canonical history is settled and she demonstrably has no
+    perception of it. The crash window is the one that matters for v0.8: the
+    MOVE and its arrival snapshot are committed, the observations are not.
+    """
+    world_conn, minds_conn = _open_both(d)
+    world = WorldStore(world_conn)
+    seed_world(world)
+    setup_arrival_scene(world)
+    router = PerceptionRouter(world, minds_conn)
+
+    result = propose_place(world, actor="warren", object_id="lighter-1",
+                           x_cm=LIGHTER_LIES_AT[0], y_cm=LIGHTER_LIES_AT[1],
+                           presence=ALL_THREE, location=ROOM,
+                           occurred_at="0008-01-01T00:00:00Z")
+    if not result.accepted:
+        raise SystemExit(f"scenario PLACE rejected: {result.reason}")
+    router.derive_pending()
+
+    arrival = propose_move(world, actor="ava", to_x_cm=AVA_ARRIVAL[0],
+                           to_y_cm=AVA_ARRIVAL[1], facing_x=AVA_ARRIVAL[2],
+                           facing_y=AVA_ARRIVAL[3], presence=ALL_THREE,
+                           location=ROOM, occurred_at="0008-01-01T00:01:00Z")
+    if not arrival.accepted:
+        raise SystemExit(f"scenario MOVE rejected: {arrival.reason}")
+    if crash_before_derive:
+        # Hard kill. The MOVE, the pose transition and the arrival snapshot are
+        # committed; not one observation has been written.
+        os._exit(9)
+    router.derive_pending()
+
+
+def arrival_disturb(d: str) -> None:
+    """Change the world OUT from under an undelivered scan.
+
+    Warren takes the lighter away, and a wall goes up across the line of sight
+    Ava used. Either change alone is enough to expose a recovery path that
+    consults the present: the object is no longer lying anywhere, and the sight
+    line is now blocked. Neither may alter what Ava saw when she arrived.
+    """
+    world_conn, _ = _open_both(d)
+    world = WorldStore(world_conn)
+    result = propose_pickup(world, actor="warren", object_id="lighter-1",
+                            presence=ALL_THREE, location=ROOM,
+                            occurred_at="0008-01-01T00:02:00Z")
+    if not result.accepted:
+        raise SystemExit(f"scenario PICKUP rejected: {result.reason}")
+    world.add_wall(*LATE_WALL)
+
+
 def recover(d: str) -> int:
     world_conn, minds_conn = _open_both(d)
     router = PerceptionRouter(WorldStore(world_conn), minds_conn)
@@ -403,7 +490,7 @@ def main(argv: list[str] | None = None) -> int:
         "--phase", required=True,
         choices=["populate", "recover", "recall", "move",
                  "wall-populate", "wall-add", "wall-remove", "wall-event",
-                 "offer", "answer"],
+                 "offer", "answer", "arrival-populate", "arrival-disturb"],
     )
     ap.add_argument("--response", choices=["ACCEPT", "REFUSE"], default="REFUSE")
     ap.add_argument("--attempt", default=None)
@@ -416,6 +503,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.phase == "populate":
         populate(args.dir, args.crash_before_derive)
+    elif args.phase == "arrival-populate":
+        arrival_populate(args.dir, args.crash_before_derive is not None)
+    elif args.phase == "arrival-disturb":
+        arrival_disturb(args.dir)
     elif args.phase == "wall-populate":
         wall_populate(args.dir, args.wall == "yes", args.crash_before_derive)
     elif args.phase in ("wall-add", "wall-remove"):
