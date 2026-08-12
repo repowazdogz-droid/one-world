@@ -47,18 +47,28 @@ CREATE TRIGGER IF NOT EXISTS object_no_delete
 BEFORE DELETE ON object
 BEGIN SELECT RAISE(ABORT, 'object identity is append-only'); END;
 
--- MUTABLE present-day possession. Exactly one row per object, so "held by two
--- beings at once" is not a state this schema can express -- the contradiction
--- is prevented structurally rather than checked for.
+-- MUTABLE present-day object state. An object is EITHER held by an inhabitant
+-- OR lying at a point in the world -- never both, never neither.
 --
--- v0.4 narrowing: every object is always held by someone. There is no
--- free-standing "on the floor" state, because the milestone does not need one.
--- `stowed_in` is a label for having put the object away on your person; the
--- holder does not change when you stow something.
+-- The exclusivity is STRUCTURAL, not checked in Python:
+--   * one row per object (PRIMARY KEY)  -> no two holders, no two positions
+--   * exactly one of holder_id / x_cm   -> no "held and on the floor", and no
+--                                          object with no state at all
+--   * x_cm and y_cm both-or-neither     -> no half a position
+--   * stowed_in only while held         -> you cannot pocket the floor
+--
+-- `stowed_in` keeps its narrow v0.4 meaning: a label for having put the object
+-- away on your person. It applies only to a HELD object, and PLACE clears it,
+-- because an object lying on the ground is not in anyone's pocket.
 CREATE TABLE IF NOT EXISTS object_location (
     object_id  TEXT PRIMARY KEY REFERENCES object(object_id),
-    holder_id  TEXT NOT NULL REFERENCES being(being_id),
-    stowed_in  TEXT
+    holder_id  TEXT REFERENCES being(being_id),
+    stowed_in  TEXT,
+    x_cm       INTEGER,
+    y_cm       INTEGER,
+    CHECK ((holder_id IS NOT NULL) + (x_cm IS NOT NULL) = 1),
+    CHECK ((x_cm IS NULL) = (y_cm IS NULL)),
+    CHECK (stowed_in IS NULL OR holder_id IS NOT NULL)
 );
 
 -- An offer that has reached its recipient and is awaiting their answer.

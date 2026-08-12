@@ -66,6 +66,23 @@ def _move_coarse(p: dict) -> dict:
     return {"actor": p["actor"], "moved": True}
 
 
+def _place_clear(p: dict) -> dict:
+    return {"actor": p["actor"], "object": p["object"], "at": p["at"]}
+
+
+def _place_coarse(p: dict) -> dict:
+    # "Warren put something down." Neither what it was nor exactly where.
+    return {"actor": p["actor"], "put_down": True}
+
+
+def _pickup_clear(p: dict) -> dict:
+    return {"actor": p["actor"], "object": p["object"], "at": p["at"]}
+
+
+def _pickup_coarse(p: dict) -> dict:
+    return {"actor": p["actor"], "picked_up": True}
+
+
 def _stow_clear(p: dict) -> dict:
     return {"actor": p["actor"], "object": p["object"], "place": p["place"]}
 
@@ -80,6 +97,10 @@ _PROJECTIONS: dict[tuple[str, str], Callable[[dict], dict]] = {
     ("REFUSAL", "CLEAR"): _refusal_clear,
     ("MOVE", "CLEAR"): _move_clear,
     ("MOVE", "COARSE"): _move_coarse,
+    ("PLACE", "CLEAR"): _place_clear,
+    ("PLACE", "COARSE"): _place_coarse,
+    ("PICKUP", "CLEAR"): _pickup_clear,
+    ("PICKUP", "COARSE"): _pickup_coarse,
 }
 
 

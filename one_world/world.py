@@ -18,7 +18,7 @@ from one_world.sensing import sense_event
 #: commit_event -- otherwise the action layer would be a well-behaved caller
 #: alongside an open back door, rather than the only way in.
 STATE_CHANGING_KINDS = frozenset(
-    {"GIVE", "GIVE_ATTEMPT", "MOVE", "REFUSAL", "STOW"}
+    {"GIVE", "GIVE_ATTEMPT", "MOVE", "PICKUP", "PLACE", "REFUSAL", "STOW"}
 )
 
 
@@ -135,8 +135,9 @@ class WorldStore:
                 (object_id, kind, description),
             )
             self._conn.execute(
-                "INSERT INTO object_location (object_id, holder_id, stowed_in) "
-                "VALUES (?, ?, NULL)",
+                "INSERT INTO object_location "
+                "(object_id, holder_id, stowed_in, x_cm, y_cm) "
+                "VALUES (?, ?, NULL, NULL, NULL)",
                 (object_id, holder_id),
             )
 
@@ -150,7 +151,7 @@ class WorldStore:
     def object_location(self, object_id: str):
         """Current holder and stow label, or None if the object is unknown."""
         return self._conn.execute(
-            "SELECT object_id, holder_id, stowed_in FROM object_location "
+            "SELECT object_id, holder_id, stowed_in, x_cm, y_cm FROM object_location "
             "WHERE object_id = ?",
             (object_id,),
         ).fetchone()
@@ -169,6 +170,30 @@ class WorldStore:
         self._conn.execute(
             "UPDATE object_location SET stowed_in = ? WHERE object_id = ?",
             (stowed_in, object_id),
+        )
+
+    def _place_object(self, object_id: str, x_cm: int, y_cm: int) -> None:
+        """HELD -> PLACED. Caller MUST hold the transaction.
+
+        Clears the holder and any stow label together with setting the point,
+        so the exclusivity CHECK can never be momentarily violated.
+        """
+        self._conn.execute(
+            "UPDATE object_location SET holder_id = NULL, stowed_in = NULL, "
+            "x_cm = ?, y_cm = ? WHERE object_id = ?",
+            (x_cm, y_cm, object_id),
+        )
+
+    def _take_object(self, object_id: str, holder_id: str) -> None:
+        """PLACED -> HELD. Caller MUST hold the transaction.
+
+        Clears the point in the same statement that sets the holder, so an
+        object can never be both held and lying somewhere.
+        """
+        self._conn.execute(
+            "UPDATE object_location SET holder_id = ?, stowed_in = NULL, "
+            "x_cm = NULL, y_cm = NULL WHERE object_id = ?",
+            (holder_id, object_id),
         )
 
     def _transfer_holder(self, object_id: str, to_holder: str,

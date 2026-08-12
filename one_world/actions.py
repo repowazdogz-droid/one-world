@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from one_world import geometry
 from one_world.world import WorldStore
 
 # Rejection reasons. Stable identifiers, not prose, so callers can branch.
@@ -34,12 +35,21 @@ ALREADY_RESOLVED = "ALREADY_RESOLVED"
 ZERO_FACING = "ZERO_FACING"
 NO_CHANGE = "NO_CHANGE"
 NOT_PLACED = "NOT_PLACED"
+NOT_ON_THE_GROUND = "NOT_ON_THE_GROUND"
+OUT_OF_REACH = "OUT_OF_REACH"
 
 ACCEPT = "ACCEPT"
 REFUSE = "REFUSE"
 #: The whole vocabulary an inhabitant has for answering an offer. Anything else
 #: fails closed -- the world does not guess what an unrecognised answer means.
 RESPONSES = frozenset({ACCEPT, REFUSE})
+
+#: How close you must be to put something down or pick something up.
+#: Deliberately crude: one radius, no arm length, no reaching direction, no
+#: hand pose, no height. Exact integer centimetres, compared as squared
+#: distance, consistent with every other threshold in the world.
+#: BOUNDARY: INCLUSIVE -- exactly at the radius is within reach.
+INTERACTION_RANGE_CM = 80
 
 
 @dataclass(frozen=True)
@@ -332,4 +342,114 @@ def propose_move(
         )
         # ...then the transition the event explains.
         world._move_pose(actor, to_x_cm, to_y_cm, facing_x, facing_y)
+    return ActionResult(accepted=True, event_id=event_id)
+
+
+# ---------------------------------------------------------------------------
+# v0.7: objects exist in space.
+#
+# Until now an object was always in someone's hand. These two actions let a
+# lighter lie on the ground as canonical world state, and make possession
+# something you have to be physically close enough to acquire.
+# ---------------------------------------------------------------------------
+
+
+def propose_place(
+    world: WorldStore,
+    *,
+    actor: str,
+    object_id: str,
+    x_cm: int,
+    y_cm: int,
+    presence: list[str],
+    location: str,
+    occurred_at: str,
+) -> ActionResult:
+    """Put down something you are holding, at a point you can reach.
+
+    Preconditions: the actor exists and is placed in the world, the object
+    exists, the actor currently holds it, and the destination point is within
+    INTERACTION_RANGE_CM of the actor. Nobody may set an object down across
+    the room.
+
+    On success the object stops being held and becomes a point in the world;
+    any stow label is cleared, because something lying on the ground is not in
+    anyone's pocket.
+    """
+    with world.transaction():
+        if not world.being_exists(actor):
+            return _rejected(UNKNOWN_ACTOR)
+        obj = world.object_row(object_id)
+        if obj is None:
+            return _rejected(UNKNOWN_OBJECT)
+        loc = world.object_location(object_id)
+        if loc is None or loc["holder_id"] != actor:
+            return _rejected(NOT_POSSESSED)
+        try:
+            ax, ay, _, _ = world.current_pose(actor)
+        except KeyError:
+            return _rejected(NOT_PLACED)
+        if not geometry.within_radius(ax, ay, x_cm, y_cm, INTERACTION_RANGE_CM):
+            return _rejected(OUT_OF_REACH)
+
+        world._place_object(object_id, x_cm, y_cm)
+        event_id = world._append_event_locked(
+            kind="PLACE",
+            location=location,
+            actor_id=actor,
+            payload={"actor": actor, "object": obj["description"],
+                     "at": [x_cm, y_cm]},
+            presence=presence,
+            event_x_cm=x_cm,
+            event_y_cm=y_cm,
+            occurred_at=occurred_at,
+        )
+    return ActionResult(accepted=True, event_id=event_id)
+
+
+def propose_pickup(
+    world: WorldStore,
+    *,
+    actor: str,
+    object_id: str,
+    presence: list[str],
+    location: str,
+    occurred_at: str,
+) -> ActionResult:
+    """Pick up something lying in the world, if you are close enough to it.
+
+    Preconditions: the actor exists and is placed, the object exists, the
+    object is currently on the ground rather than held by anyone, and the actor
+    is within INTERACTION_RANGE_CM of it. Reach is derived from canonical poses
+    and the object's own position -- no caller asserts that it is reachable.
+    """
+    with world.transaction():
+        if not world.being_exists(actor):
+            return _rejected(UNKNOWN_ACTOR)
+        obj = world.object_row(object_id)
+        if obj is None:
+            return _rejected(UNKNOWN_OBJECT)
+        loc = world.object_location(object_id)
+        if loc is None or loc["x_cm"] is None:
+            return _rejected(NOT_ON_THE_GROUND)
+        try:
+            ax, ay, _, _ = world.current_pose(actor)
+        except KeyError:
+            return _rejected(NOT_PLACED)
+        ox, oy = loc["x_cm"], loc["y_cm"]
+        if not geometry.within_radius(ax, ay, ox, oy, INTERACTION_RANGE_CM):
+            return _rejected(OUT_OF_REACH)
+
+        world._take_object(object_id, actor)
+        event_id = world._append_event_locked(
+            kind="PICKUP",
+            location=location,
+            actor_id=actor,
+            payload={"actor": actor, "object": obj["description"],
+                     "at": [ox, oy]},
+            presence=presence,
+            event_x_cm=ox,
+            event_y_cm=oy,
+            occurred_at=occurred_at,
+        )
     return ActionResult(accepted=True, event_id=event_id)

@@ -112,7 +112,7 @@ def test_state_changing_kinds_are_exactly_the_guarded_set():
     """v0.5 added two: GIVE_ATTEMPT creates a pending offer, REFUSAL resolves
     one, so both change canonical state and both must be unforgeable."""
     assert STATE_CHANGING_KINDS == frozenset(
-        {"GIVE", "GIVE_ATTEMPT", "MOVE", "REFUSAL", "STOW"})
+        {"GIVE", "GIVE_ATTEMPT", "MOVE", "PICKUP", "PLACE", "REFUSAL", "STOW"})
 
 
 def test_no_production_module_calls_the_locked_appender_except_actions():
@@ -294,7 +294,8 @@ def test_failure_inside_the_transaction_rolls_back_state_and_history(tmp_path, m
     # Snapshot AFTER the offer, so the injection is measured against the
     # transaction that actually moves possession -- the ACCEPT.
     before = canonical_snapshot(wc)
-    assert before["object_location"] == [("lighter-1", "warren", None)]
+    # Read by name: v0.7 widened the row with x_cm/y_cm.
+    assert world.object_location("lighter-1")["holder_id"] == "warren"
 
     import one_world.world as world_module
 
@@ -327,7 +328,8 @@ def test_the_injection_would_otherwise_have_written(tmp_path):
     assert len(snap["world_pose"]) == len(before["world_pose"]) + 3
     assert len(snap["world_observation"]) == len(before["world_observation"]) + 3
     assert len(snap["projection_outbox"]) == len(before["projection_outbox"]) + 1
-    assert snap["object_location"] == [("lighter-1", "ava", None)]
+    loc = world.object_location("lighter-1")
+    assert loc["holder_id"] == "ava" and loc["x_cm"] is None
 
 
 # -- history does not follow current state -------------------------------

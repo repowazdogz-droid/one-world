@@ -309,6 +309,49 @@ learn *that* someone moved, with no direction or distance — there is no fuzzy
 position estimate. Initialization is enforced by `seed_pose` being insert-only,
 which is an API-level boundary, not a lifecycle state machine.
 
+## v0.7: objects exist in space
+
+Until now every object was always in someone's hand — `object_location.holder_id`
+was `NOT NULL`, so the world could not represent a lighter lying on a table.
+v0.7 separates *existing* from *being possessed*.
+
+An object is **either** held **or** lying at a point, never both and never
+neither, and that is enforced by the schema rather than by Python:
+
+```sql
+CHECK ((holder_id IS NOT NULL) + (x_cm IS NOT NULL) = 1)   -- exactly one state
+CHECK ((x_cm IS NULL) = (y_cm IS NULL))                    -- no half a position
+CHECK (stowed_in IS NULL OR holder_id IS NOT NULL)         -- no pocketing the floor
+```
+
+Together with `PRIMARY KEY (object_id)` — one row, so no two holders and no two
+positions — every contradictory state is rejected by SQLite itself.
+
+**Two actions.** `propose_place(actor, object_id, x_cm, y_cm)` puts down
+something you hold, at a point you can reach. `propose_pickup(actor, object_id)`
+takes something lying in the world, if you are close enough to it. Reach is
+derived from canonical poses and the object's own position — no caller asserts
+that something is reachable.
+
+```
+INTERACTION_RANGE_CM = 80    inclusive at the radius, rejected one cm past it
+```
+
+Deliberately crude: one radius, no arm length, no reaching direction, no hand
+pose, no height. Exact integer squared-distance, like every other threshold.
+
+**Perception.** PLACE and PICKUP are visual events like any other. CLEAR gives
+`{actor, object, at}`; COARSE gives `{actor, put_down}` or `{actor, picked_up}`
+— neither what it was nor where. A wall between you and the table means you
+never learn it happened at all.
+
+**Accepted v0.7 limitations.** A placed object is a bare point: no tables,
+surfaces, containers, rooms, or nesting; no dimensions, mass, gravity, or
+collision, so two objects may occupy the same point and nothing ever falls.
+Objects are perceived only through the PLACE and PICKUP *events* — there is no
+continuous observation, so walking into a room does not tell you what is lying
+in it. Nobody may refuse or contest a pickup; v0.5's consent covers GIVE only.
+
 ## Accepted v0.1 limitation: an unprojectable event wedges the queue
 
 Projection fails closed. If `project()` raises for a committed event — an

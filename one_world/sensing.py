@@ -24,6 +24,8 @@ MODALITY = {
     "GIVE": VISUAL,
     "GIVE_ATTEMPT": VISUAL,   # you can watch someone offer something
     "MOVE": VISUAL,           # you can watch someone set off
+    "PLACE": VISUAL,          # you can watch someone put something down
+    "PICKUP": VISUAL,
     "STOW": VISUAL,
     "SPEECH": AUDIO,
     "REFUSAL": AUDIO,         # saying no out loud; heard, not seen
