@@ -19,7 +19,10 @@ import pytest
 from one_world import schema
 from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
-from one_world.scenario import BEINGS, SCENARIO, apply_step, seed_world
+from one_world.actions import propose_move
+from one_world.scenario import (
+    ALL_THREE, BEINGS, ROOM, SCENARIO, apply_step, seed_world,
+)
 from one_world.world import WorldStore
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,11 +49,32 @@ def build(tmp_path, steps):
     return world, CharacterHistory(mc)
 
 
+BASE_POSES = {
+    "warren": (0, 0, 1, 0),
+    "ava": (100, 0, -1, 0),
+    "noah": (50, 800, 0, -1),
+}
+
+
 def with_noah_at(step_index, pose):
-    """The scenario step, with exactly ONE variable changed: Noah's pose."""
+    """A self-contained one-step scene, ONE variable changed: Noah's pose.
+
+    v0.6 made mid-scenario pose changes real MOVE events, so the counterfactual
+    seeds its own starting poses rather than reusing a later step's.
+    """
     step = copy.deepcopy(SCENARIO[step_index])
-    step["poses"]["noah"] = pose
+    step.pop("moves", None)
+    step["seed_poses"] = {**BASE_POSES, "noah": pose}
     return step
+
+
+def move(world, actor, x, y, fx, fy, at="t-move"):
+    """A pose change, which v0.6 requires to be a validated action."""
+    result = propose_move(world, actor=actor, to_x_cm=x, to_y_cm=y,
+                          facing_x=fx, facing_y=fy, presence=ALL_THREE,
+                          location=ROOM, occurred_at=at)
+    assert result.accepted, result.reason
+    return result
 
 
 # -- the seam is closed --------------------------------------------------
@@ -90,28 +114,36 @@ def test_scenario_grades_are_derived_from_geometry(tmp_path):
         "evt-000001": {"ava": "CLEAR", "noah": "COARSE", "warren": "CLEAR"},
         # DIRECTED speech carries 150 cm. Ava is 100 cm away, Noah ~802 cm.
         "evt-000002": {"ava": "CLEAR", "warren": "CLEAR"},
+        # Warren turns away: he is the actor; Ava is 100 cm from him; Noah is
+        # 802 cm away but still in his cone, so coarse.
+        "evt-000003": {"ava": "CLEAR", "noah": "COARSE", "warren": "CLEAR"},
+        # Noah turns away: only he perceives it, by agency. Ava is nearly
+        # abeam of him and Warren has just turned his back.
+        "evt-000004": {"noah": "CLEAR"},
         # Both onlookers have turned away; Ava perceives it as the actor.
-        "evt-000003": {"ava": "CLEAR"},
+        "evt-000005": {"ava": "CLEAR"},
     }
 
 
 def test_warren_misses_the_stow_because_of_facing_not_distance(tmp_path):
     """He is 100 cm away -- well inside detail range -- and still sees nothing."""
     world, history = build(tmp_path, SCENARIO)
-    stow = world.load_event("evt-000003")
+    stow = world.load_event("evt-000005")
     wx, wy, fx, fy = stow["poses"]["warren"]
     assert (wx, wy) == (0, 0) and (fx, fy) == (-1, 0)
     assert abs(stow["event_x_cm"] - wx) == 100  # inside DETAIL_RANGE_CM of 300
     assert "warren" not in stow["observations"]
-    assert len(history.recall("warren")) == 3
+    assert len(history.recall("warren")) == 4
 
 
 def test_noah_receives_only_coarse_visuals_and_nothing_else(tmp_path):
     _, history = build(tmp_path, SCENARIO)
     noah = history.recall("noah")
-    assert [m["kind"] for m in noah] == ["GIVE_ATTEMPT", "GIVE"]
-    assert all(m["grade"] == "COARSE" for m in noah)
-    assert [m["content"]["object"] for m in noah] == ["something", "something"]
+    assert [m["kind"] for m in noah] == ["GIVE_ATTEMPT", "GIVE", "MOVE", "MOVE"]
+    assert [m["content"]["object"] for m in noah
+            if "object" in m["content"]] == ["something", "something"]
+    # The only MOVE he sees in detail is his own turn, by agency.
+    assert [m["grade"] for m in noah] == ["COARSE", "COARSE", "COARSE", "CLEAR"]
 
 
 # -- counterfactuals: one variable, causally -----------------------------
@@ -124,8 +156,8 @@ def test_counterfactual_moving_noah_closer_reveals_the_object(tmp_path):
     """
     baseline = with_noah_at(0, (50, 800, 0, -1))
     closer = with_noah_at(0, (50, 200, 0, -1))
-    assert baseline["poses"]["noah"][0] == closer["poses"]["noah"][0]
-    assert baseline["poses"]["noah"][2:] == closer["poses"]["noah"][2:]
+    assert baseline["seed_poses"]["noah"][0] == closer["seed_poses"]["noah"][0]
+    assert baseline["seed_poses"]["noah"][2:] == closer["seed_poses"]["noah"][2:]
 
     _, far_history = build(tmp_path / "far", [baseline])
     _, near_history = build(tmp_path / "near", [closer])
@@ -141,7 +173,7 @@ def test_counterfactual_turning_noah_away_removes_the_memory(tmp_path):
     """ONE variable: Noah's facing from (0,-1) to (0,1). Position unchanged."""
     watching = with_noah_at(0, (50, 800, 0, -1))
     turned = with_noah_at(0, (50, 800, 0, 1))
-    assert watching["poses"]["noah"][:2] == turned["poses"]["noah"][:2]
+    assert watching["seed_poses"]["noah"][:2] == turned["seed_poses"]["noah"][:2]
 
     _, a = build(tmp_path / "watching", [watching])
     _, b = build(tmp_path / "turned", [turned])
@@ -172,7 +204,7 @@ def test_counterfactual_moving_noah_into_earshot_reveals_the_sentence(tmp_path):
 
 def test_event_time_pose_snapshot_is_immutable_and_differs_from_current(tmp_path):
     world, _ = build(tmp_path, SCENARIO)
-    world.set_pose("noah", 50, 200, 0, -1)  # walk up close, AFTER the fact
+    move(world, "noah", 50, 200, 0, -1)     # walk up close, AFTER the fact
     assert world.current_pose("noah") == (50, 200, 0, -1)
     assert world.load_event("evt-000000")["poses"]["noah"] == (50, 800, 0, -1)
 
@@ -180,8 +212,8 @@ def test_event_time_pose_snapshot_is_immutable_and_differs_from_current(tmp_path
 def test_moving_after_the_event_does_not_change_history(tmp_path):
     world, history = build(tmp_path, SCENARIO)
     before = history.recall("noah")
-    world.set_pose("noah", 50, 100, 0, -1)
-    world.set_pose("warren", 100, 0, 1, 0)
+    move(world, "noah", 50, 100, 0, -1)
+    move(world, "warren", 100, 0, 1, 0)
     assert history.recall("noah") == before
 
 
@@ -211,11 +243,15 @@ def test_crash_then_move_then_recover_preserves_event_time_perception(tmp_path):
     assert r.returncode == 0, r.stderr
 
     noah = json.loads(run_phase(tmp_path, "recall").stdout)["noah"]
-    assert len(noah) == 2
-    assert all(m["grade"] == "COARSE" for m in noah), "recovery used present-day position"
-    assert all(m["content"]["object"] == "something" for m in noah)
+    # v0.6: walking closer is itself an event he perceives, by agency. The two
+    # memories of what happened BEFORE he moved must not improve.
+    assert [m["kind"] for m in noah] == ["GIVE_ATTEMPT", "GIVE", "MOVE"]
+    earlier = [m for m in noah if m["kind"] != "MOVE"]
+    assert all(m["grade"] == "COARSE" for m in earlier), (
+        "recovery used present-day position")
+    assert all(m["content"]["object"] == "something" for m in earlier)
 
-    blob = json.dumps(noah).lower()
+    blob = json.dumps(earlier).lower()
     assert "lighter" not in blob and "red" not in blob
 
 
@@ -232,12 +268,16 @@ def test_recovered_perception_equals_uninterrupted_perception(tmp_path):
     run_phase(crashed, "move", "--being", "noah",
               "--x", "50", "--y", "200", "--fx", "0", "--fy", "-1")
     run_phase(crashed, "recover")
-    # Re-commit the remaining events is not possible after a hard exit, so
-    # compare only what the crashed run actually holds: the first event.
+    # The crashed run cannot re-commit the events it never reached, AND it
+    # performs an extra MOVE that the clean run never does. So compare only the
+    # memories the two runs genuinely share: those not arising from a MOVE.
     got = json.loads(run_phase(crashed, "recall").stdout)
     for being in ("warren", "ava", "noah"):
-        assert got[being] == expected[being][: len(got[being])], being
-        assert got[being], being
+        shared = [m for m in got[being] if m["kind"] != "MOVE"]
+        clean = [m for m in expected[being] if m["kind"] != "MOVE"]
+        assert shared, being
+        assert [ (m["kind"], m["grade"], m["content"]) for m in shared ] == \
+               [ (m["kind"], m["grade"], m["content"]) for m in clean[: len(shared)] ], being
 
 
 # -- canonical status of the snapshot ------------------------------------
@@ -261,11 +301,18 @@ def test_event_time_snapshot_is_append_only(tmp_path, statement, message):
     assert sorted(tuple(r) for r in conn.execute("SELECT * FROM world_pose")) == before
 
 
-def test_present_day_pose_is_mutable_by_contrast(tmp_path):
-    """being_pose is deliberately NOT append-only; it is the living world."""
+def test_present_day_pose_changes_only_through_a_recorded_move(tmp_path):
+    """being_pose is still the living world -- but v0.6 requires a cause.
+
+    Stronger than the v0.2 version: it is not enough that the pose changed;
+    the change must have left a MOVE event behind.
+    """
     world, _ = build(tmp_path, SCENARIO)
-    world.set_pose("noah", 1, 2, 3, 4)
+    before = world.event_count()
+    move(world, "noah", 1, 2, 3, 4)
     assert world.current_pose("noah") == (1, 2, 3, 4)
+    assert world.event_count() == before + 1
+    assert world.all_events()[-1]["kind"] == "MOVE"
 
 
 def test_committing_without_a_pose_fails_closed(tmp_path):
@@ -274,7 +321,7 @@ def test_committing_without_a_pose_fails_closed(tmp_path):
     world = WorldStore(wc)
     for being_id, name, nature in BEINGS:
         world.add_being(being_id, name, nature)
-    world.set_pose("warren", 0, 0, 1, 0)  # ava and noah have no pose
+    world.seed_pose("warren", 0, 0, 1, 0)  # ava and noah have no pose
     # SCENARIO[1] is the SPEECH step, the one that still goes through
     # commit_event directly; GIVE and STOW now require the action layer.
     with pytest.raises(KeyError, match="has no pose"):

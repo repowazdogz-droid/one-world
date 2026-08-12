@@ -68,18 +68,22 @@ def test_unsafe_makes_warren_omniscient(unsafe_results):
     assert unsafe_results["warren_not_omniscient"] is False
 
 
-def test_unsafe_still_passes_avas_checks(safe_results, unsafe_results):
-    """Expected, and correct.
+def test_unsafe_still_agrees_where_ava_genuinely_perceived_everything(
+    safe_results, unsafe_results):
+    """A negative control that failed EVERY check would only show the harness
+    can spot a broken program. It must still agree somewhere.
 
-    Ava perceived everything at CLEAR, so a canonical-reading implementation
-    gets her right. A negative control that failed EVERY check would only show
-    the harness can spot a broken program; failing exactly the information-flow
-    checks shows it spots the failure we care about.
+    v0.6 narrowed this honestly: Ava no longer perceives the whole world. She
+    misses Noah's rotation, because from (100,0) facing (-1,0) he is nearly
+    abeam. So her COUNT and KIND ORDER now legitimately differ from what a
+    canonical-reading implementation returns, and only the content checks --
+    the ones about events she really did perceive -- still agree.
     """
-    ava_checks = [k for k in safe_results if k.startswith("ava_")]
-    assert ava_checks
-    for k in ava_checks:
-        assert unsafe_results[k] is True
+    agreeing = [k for k in safe_results if safe_results[k] == unsafe_results[k]]
+    assert "ava_knows_red_lighter" in agreeing
+    assert "ava_knows_private_sentence" in agreeing
+    assert "ava_seq_strictly_ascending" in agreeing
+    assert len(agreeing) >= 4, "the control flips everything; it discriminates nothing"
 
 
 def test_discrimination_is_non_trivial(safe_results, unsafe_results):

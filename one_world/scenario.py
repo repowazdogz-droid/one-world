@@ -23,7 +23,7 @@ import sys
 
 from one_world import schema
 from one_world.actions import (
-    ACCEPT, attempt_give, propose_stow, respond_to_attempt,
+    ACCEPT, attempt_give, propose_move, propose_stow, respond_to_attempt,
 )
 from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
@@ -58,7 +58,7 @@ ALL_THREE = ["warren", "ava", "noah"]
 SCENARIO = [
     {
         # Warren hands Ava the lighter. Ava is 50 cm away, Noah 800 cm.
-        "poses": {
+        "seed_poses": {
             "warren": (0, 0, 1, 0),
             "ava": (100, 0, -1, 0),
             "noah": (50, 800, 0, -1),
@@ -79,11 +79,6 @@ SCENARIO = [
     {
         # Warren speaks quietly to Ava. DIRECTED carries 150 cm; Ava is 100 cm
         # from him, Noah is ~802 cm. Noah is in the room and does not hear it.
-        "poses": {
-            "warren": (0, 0, 1, 0),
-            "ava": (100, 0, -1, 0),
-            "noah": (50, 800, 0, -1),
-        },
         "event": {
             "kind": "SPEECH",
             "location": ROOM,
@@ -104,11 +99,13 @@ SCENARIO = [
         # Ava pockets the lighter. Warren has turned away (facing -x, so Ava at
         # +100 is behind him) and Noah has turned away (facing +y, away from the
         # exchange). Only Ava perceives it -- by agency, being the actor.
-        "poses": {
-            "warren": (0, 0, -1, 0),
-            "ava": (100, 0, -1, 0),
-            "noah": (50, 800, 0, 1),
-        },
+        # Turning away is itself a state change now, so each is a real MOVE.
+        "moves": [
+            {"actor": "warren", "to_x_cm": 0, "to_y_cm": 0,
+             "facing_x": -1, "facing_y": 0, "occurred_at": "0001-01-01T00:01:30Z"},
+            {"actor": "noah", "to_x_cm": 50, "to_y_cm": 800,
+             "facing_x": 0, "facing_y": 1, "occurred_at": "0001-01-01T00:01:40Z"},
+        ],
         # Ava can only stow it because the GIVE actually transferred it.
         # The event happens at her own position: (100,0).
         "action": {
@@ -180,7 +177,7 @@ def setup_wall_scene(world: WorldStore, *, with_wall: bool, noah_pose=None) -> N
     if noah_pose is not None:
         poses["noah"] = noah_pose
     for being_id, pose in sorted(poses.items()):
-        world.set_pose(being_id, *pose)
+        world.seed_pose(being_id, *pose)
     if with_wall:
         world.add_wall(WALL_ID, *BLOCKING_WALL)
     else:
@@ -207,7 +204,7 @@ SOCIAL_POSES = {
 
 def setup_social_scene(world: WorldStore) -> None:
     for being_id, pose in sorted(SOCIAL_POSES.items()):
-        world.set_pose(being_id, *pose)
+        world.seed_pose(being_id, *pose)
 
 
 def social_offer(world: WorldStore, occurred_at: str = "0003-01-01T00:00:00Z"):
@@ -238,11 +235,21 @@ def apply_step(world: WorldStore, step: dict) -> str:
     derived, and for state-changing verbs the payload and event position are
     derived too -- the step only proposes.
     """
-    for being_id, pose in sorted(step["poses"].items()):
-        world.set_pose(being_id, *pose)
+    for being_id, pose in sorted(step.get("seed_poses", {}).items()):
+        world.seed_pose(being_id, *pose)      # initialization only
+    for spec in step.get("moves", []):
+        run_move(world, spec)                  # a real, perceived MOVE event
     if "action" in step:
         return run_action(world, step["action"])
     return world.commit_event(**step["event"])
+
+
+def run_move(world: WorldStore, spec: dict) -> str:
+    """A pose change, as the state-changing action it now is."""
+    result = propose_move(world, presence=ALL_THREE, location=ROOM, **spec)
+    if not result.accepted:
+        raise AssertionError(f"scenario MOVE rejected: {result.reason}")
+    return result.event_id
 
 
 def run_action(world: WorldStore, spec: dict) -> str:
@@ -306,10 +313,15 @@ def populate(d: str, crash_before_derive: int | None) -> None:
 
 
 def move(d: str, being_id: str, x: int, y: int, fx: int, fy: int) -> None:
-    """Change present-day physical state. Must not affect past perceptions."""
-    world_conn = schema.open_world(world_path(d))
-    schema.init_world(world_conn)
-    WorldStore(world_conn).set_pose(being_id, x, y, fx, fy)
+    """Move an inhabitant. v0.6: a validated action with its own history."""
+    world_conn, minds_conn = _open_both(d)
+    world = WorldStore(world_conn)
+    result = propose_move(world, actor=being_id, to_x_cm=x, to_y_cm=y,
+                          facing_x=fx, facing_y=fy, presence=ALL_THREE,
+                          location=ROOM, occurred_at="0001-01-01T09:00:00Z")
+    if not result.accepted:
+        raise SystemExit(f"move rejected: {result.reason}")
+    PerceptionRouter(world, minds_conn).derive_pending()
 
 
 def wall_populate(d: str, with_wall: bool, crash_before_derive: int | None) -> None:

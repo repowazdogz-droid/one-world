@@ -31,6 +31,9 @@ UNKNOWN_ATTEMPT = "UNKNOWN_ATTEMPT"
 UNKNOWN_RESPONSE = "UNKNOWN_RESPONSE"
 WRONG_RESPONDER = "WRONG_RESPONDER"
 ALREADY_RESOLVED = "ALREADY_RESOLVED"
+ZERO_FACING = "ZERO_FACING"
+NO_CHANGE = "NO_CHANGE"
+NOT_PLACED = "NOT_PLACED"
 
 ACCEPT = "ACCEPT"
 REFUSE = "REFUSE"
@@ -257,3 +260,76 @@ def respond_to_attempt(
         world._resolve_attempt(attempt_id, outcome, int(event_id.split("-")[1]))
     return ActionResult(accepted=True, event_id=event_id,
                         attempt_id=attempt_id, outcome=outcome)
+
+
+# ---------------------------------------------------------------------------
+# v0.6: movement is a state transition with a cause.
+#
+# Position decides what an inhabitant can see, hear and be occluded from, so a
+# silent pose change is a silent change to everyone's future perception. After
+# initialization the only way a live inhabitant's pose changes is through here.
+# ---------------------------------------------------------------------------
+
+
+def propose_move(
+    world: WorldStore,
+    *,
+    actor: str,
+    to_x_cm: int,
+    to_y_cm: int,
+    facing_x: int,
+    facing_y: int,
+    presence: list[str],
+    location: str,
+    occurred_at: str,
+) -> ActionResult:
+    """Move and/or turn. A discrete transition, not locomotion.
+
+    Preconditions: the actor exists and has already been placed, the facing
+    vector is non-zero, and the destination differs from the current pose in
+    position or orientation. A pure rotation IS a move: orientation already
+    changes what someone will perceive next, so turning is a real state change.
+
+    TEMPORAL SEMANTICS, chosen rather than left to statement order:
+
+        The MOVE event happens AT THE DEPARTURE. Its position is the FROM
+        position, and the event-time snapshot records the world immediately
+        BEFORE the transition -- so observers perceive the mover where they set
+        off from, not already arrived. The pose is updated only after the event
+        and its snapshots are written.
+
+    This is the reverse of GIVE, deliberately. An object's location is not a
+    sensing input, so a transfer may move state first. An actor's POSE IS the
+    sensing input, so changing it before the snapshot would make the mover
+    appear to have already teleported to everyone perceiving the movement.
+
+    The payload records from, to and facing at commit time. Nothing later
+    re-derives where a past move went by consulting today's pose.
+    """
+    with world.transaction():
+        if not world.being_exists(actor):
+            return _rejected(UNKNOWN_ACTOR)
+        if facing_x == 0 and facing_y == 0:
+            return _rejected(ZERO_FACING)
+        try:
+            fx, fy, ffx, ffy = world.current_pose(actor)
+        except KeyError:
+            return _rejected(NOT_PLACED)
+        if (fx, fy, ffx, ffy) == (to_x_cm, to_y_cm, facing_x, facing_y):
+            return _rejected(NO_CHANGE)
+
+        # Event first, while being_pose still holds the origin.
+        event_id = world._append_event_locked(
+            kind="MOVE",
+            location=location,
+            actor_id=actor,
+            payload={"actor": actor, "from": [fx, fy], "to": [to_x_cm, to_y_cm],
+                     "facing": [facing_x, facing_y]},
+            presence=presence,
+            event_x_cm=fx,
+            event_y_cm=fy,
+            occurred_at=occurred_at,
+        )
+        # ...then the transition the event explains.
+        world._move_pose(actor, to_x_cm, to_y_cm, facing_x, facing_y)
+    return ActionResult(accepted=True, event_id=event_id)

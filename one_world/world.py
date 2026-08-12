@@ -17,7 +17,9 @@ from one_world.sensing import sense_event
 #: the validated action layer (one_world.actions), never by a direct call to
 #: commit_event -- otherwise the action layer would be a well-behaved caller
 #: alongside an open back door, rather than the only way in.
-STATE_CHANGING_KINDS = frozenset({"GIVE", "GIVE_ATTEMPT", "STOW", "REFUSAL"})
+STATE_CHANGING_KINDS = frozenset(
+    {"GIVE", "GIVE_ATTEMPT", "MOVE", "REFUSAL", "STOW"}
+)
 
 
 def _dumps(obj: Any) -> str:
@@ -57,16 +59,35 @@ class WorldStore:
 
     # -- present-day physical state -------------------------------------
 
-    def set_pose(self, being_id: str, x_cm: int, y_cm: int, facing_x: int, facing_y: int) -> None:
-        """Move/turn a being NOW. Mutable; never consulted for past events."""
+    def seed_pose(self, being_id: str, x_cm: int, y_cm: int,
+                  facing_x: int, facing_y: int) -> None:
+        """Place a being for the FIRST time. Initialization only.
+
+        A plain INSERT, not an upsert: once a being has a pose this raises, so
+        seeding cannot be reused as a teleport API. That is the whole of the
+        initialization/runtime boundary -- structural, and narrow enough to
+        state precisely rather than a lifecycle state machine.
+        """
         with self._conn:
             self._conn.execute(
                 "INSERT INTO being_pose (being_id, x_cm, y_cm, facing_x, facing_y) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(being_id) DO UPDATE SET "
-                "x_cm = excluded.x_cm, y_cm = excluded.y_cm, "
-                "facing_x = excluded.facing_x, facing_y = excluded.facing_y",
+                "VALUES (?, ?, ?, ?, ?)",
                 (being_id, x_cm, y_cm, facing_x, facing_y),
             )
+
+    def _move_pose(self, being_id: str, x_cm: int, y_cm: int,
+                   facing_x: int, facing_y: int) -> None:
+        """Change a live inhabitant's pose. Caller MUST hold the transaction.
+
+        UPDATE only: it cannot create a pose, and the MOVE action is its only
+        caller, so an inhabitant's position changes only alongside the history
+        that explains it.
+        """
+        self._conn.execute(
+            "UPDATE being_pose SET x_cm = ?, y_cm = ?, facing_x = ?, facing_y = ? "
+            "WHERE being_id = ?",
+            (x_cm, y_cm, facing_x, facing_y, being_id),
+        )
 
     def current_pose(self, being_id: str) -> tuple[int, int, int, int]:
         row = self._conn.execute(

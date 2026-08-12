@@ -77,7 +77,8 @@ def test_full_history_restored_after_crash_on_last_event(tmp_path):
     assert len(partial["ava"]) == 3, "pre-recovery history should be short"
 
     rec = json.loads(run_phase(tmp_path, "recover").stdout)
-    assert rec["derived"] == 1  # Ava alone perceived the STOW
+    # The final step is two MOVEs and the STOW: five perceptions across them.
+    assert rec["derived"] == 5
 
     data = json.loads(run_phase(tmp_path, "recall").stdout)
     failed = sorted(k for k, ok in run_contract(StaticHistory(data)).items() if not ok)
@@ -88,9 +89,9 @@ def test_recovered_perception_keeps_dense_ordering(tmp_path):
     run_phase(tmp_path, "populate", "--crash-before-derive", "2")
     run_phase(tmp_path, "recover")
     data = json.loads(run_phase(tmp_path, "recall").stdout)
-    assert [m["seq"] for m in data["ava"]] == [0, 1, 2, 3]
+    assert [m["seq"] for m in data["ava"]] == [0, 1, 2, 3, 4]
     assert [m["kind"] for m in data["ava"]] == [
-        "GIVE_ATTEMPT", "GIVE", "SPEECH", "STOW"]
+        "GIVE_ATTEMPT", "GIVE", "SPEECH", "MOVE", "STOW"]
 
 
 # -- idempotency: crash AFTER the write, BEFORE the DONE mark ------------
@@ -131,9 +132,8 @@ def test_each_intended_perception_exists_exactly_once(tmp_path):
     rows = perception_rows(tmp_path)
     pairs = [(r[0], r[2]) for r in rows]
     assert len(pairs) == len(set(pairs)), "duplicate (character, event) perception"
-    # Ava 4 + Warren 3 + Noah 2. The offer is perceived exactly as the
-    # transfer is: same poses, same geometry.
-    assert len(rows) == 9
+    # Ava 5 + Warren 4 + Noah 4, over six canonical events.
+    assert len(rows) == 13
 
 
 def test_crash_at_first_event_loses_uncommitted_later_events(tmp_path):
@@ -187,7 +187,7 @@ def test_event_marked_done_only_after_its_perceptions_are_durable(tmp_path):
     world.mark_projected = spy
     PerceptionRouter(world, mc).derive_pending()
 
-    assert len(seen) == world.event_count() == 4, "not every event was marked"
+    assert len(seen) == world.event_count() == 6, "not every event was marked"
     for event_id, durable, expected in seen:
         assert durable == expected, (
             f"{event_id} marked DONE with {durable}/{expected} perceptions durable"
@@ -222,7 +222,7 @@ def test_derivation_order_follows_world_seq_not_outbox_row_order(tmp_path):
     for step in SCENARIO:                      # all PENDING, none derived
         apply_step(world, step)
     committed = [r["event_id"] for r in world.pending_projections()]
-    assert len(committed) == 4                 # offer, transfer, speech, stow
+    assert len(committed) == 6   # offer, transfer, speech, two moves, stow
 
     rows = [dict(r) for r in wc.execute("SELECT * FROM projection_outbox")]
     with wc:

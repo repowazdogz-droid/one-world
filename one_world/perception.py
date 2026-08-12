@@ -54,6 +54,18 @@ def _refusal_clear(p: dict) -> dict:
     return {"refuser": p["refuser"], "utterance": p["utterance"]}
 
 
+def _move_clear(p: dict) -> dict:
+    return {"actor": p["actor"], "from": p["from"], "to": p["to"],
+            "facing": p["facing"]}
+
+
+def _move_coarse(p: dict) -> dict:
+    # Seen from too far to tell where they went. Exact coordinates are canonical
+    # detail the observer did not receive, so they are destroyed here rather
+    # than stored and filtered.
+    return {"actor": p["actor"], "moved": True}
+
+
 def _stow_clear(p: dict) -> dict:
     return {"actor": p["actor"], "object": p["object"], "place": p["place"]}
 
@@ -66,6 +78,8 @@ _PROJECTIONS: dict[tuple[str, str], Callable[[dict], dict]] = {
     ("GIVE_ATTEMPT", "CLEAR"): _attempt_clear,
     ("GIVE_ATTEMPT", "COARSE"): _attempt_coarse,
     ("REFUSAL", "CLEAR"): _refusal_clear,
+    ("MOVE", "CLEAR"): _move_clear,
+    ("MOVE", "COARSE"): _move_coarse,
 }
 
 

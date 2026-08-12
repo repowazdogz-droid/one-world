@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-CANONICAL_EVENT_COUNT = 4
+CANONICAL_EVENT_COUNT = 6
 
 FORBIDDEN_FOR_NOAH = ["lighter", "red", "leaving tomorrow", "jacket", "pocket"]
 
@@ -39,15 +39,15 @@ def run_contract(history: Any) -> dict[str, bool]:
             r[name] = False
 
     # -- Ava: perceived everything, at full fidelity --------------------
-    check("ava_memory_count_is_4", lambda: len(ava) == 4)
+    check("ava_memory_count_is_5", lambda: len(ava) == 5)
     check(
         "ava_seq_strictly_ascending",
         lambda: all(a["seq"] < b["seq"] for a, b in zip(ava, ava[1:])),
     )
     check(
-        "ava_kind_order_is_attempt_give_speech_stow",
+        "ava_kind_order_is_attempt_give_speech_move_stow",
         lambda: [m["kind"] for m in ava]
-        == ["GIVE_ATTEMPT", "GIVE", "SPEECH", "STOW"],
+        == ["GIVE_ATTEMPT", "GIVE", "SPEECH", "MOVE", "STOW"],
     )
     check("ava_knows_red_lighter", lambda: ava[1]["content"]["object"] == "red lighter")
     check(
@@ -60,10 +60,28 @@ def run_contract(history: Any) -> dict[str, bool]:
     )
 
     # -- Noah: present throughout, perceived almost none of it ----------
-    check("noah_memory_count_is_2", lambda: len(noah) == 2)
+    check("noah_memory_count_is_4", lambda: len(noah) == 4)
+    check(
+        "noah_kind_order_is_attempt_give_move_move",
+        lambda: [m["kind"] for m in noah]
+        == ["GIVE_ATTEMPT", "GIVE", "MOVE", "MOVE"],
+    )
     check(
         "noah_objects_are_all_something",
-        lambda: [m["content"]["object"] for m in noah] == ["something", "something"],
+        lambda: [m["content"]["object"] for m in noah if "object" in m["content"]]
+        == ["something", "something"],
+    )
+    check(
+        "noah_learns_no_coordinates_of_another_beings_move",
+        # Structural, and deliberately NOT filtered on the grade label: a
+        # mutant that mislabels grades would make a grade-filtered check
+        # vacuously true.
+        lambda: [
+            sorted(m["content"])
+            for m in noah
+            if m["kind"] == "MOVE" and m["content"].get("actor") != "noah"
+        ]
+        == [["actor", "moved"]],
     )
     check("noah_no_red_lighter", lambda: "lighter" not in _blob(noah) and "red" not in _blob(noah))
     check("noah_no_private_sentence", lambda: "leaving tomorrow" not in _blob(noah))
@@ -78,7 +96,7 @@ def run_contract(history: Any) -> dict[str, bool]:
     )
 
     # -- Warren: a human player, and still just an inhabitant -----------
-    check("warren_memory_count_is_3", lambda: len(warren) == 3)
+    check("warren_memory_count_is_4", lambda: len(warren) == 4)
     check(
         "warren_no_stow_detail",
         lambda: "jacket" not in _blob(warren) and "pocket" not in _blob(warren),
@@ -99,14 +117,18 @@ def run_contract(history: Any) -> dict[str, bool]:
 #: Checks that MUST flip to failing when recall is served from canonical
 #: history filtered by presence. Asserted in test_negative_control.py.
 MUST_FAIL_AGAINST_UNSAFE = {
-    "noah_memory_count_is_2",
-    "noah_objects_are_all_something",
-    "noah_no_red_lighter",
-    "noah_no_private_sentence",
-    "noah_no_utterance_field",
-    "noah_no_stow_detail",
+    "ava_kind_order_is_attempt_give_speech_move_stow",
+    "ava_memory_count_is_5",
+    "noah_kind_order_is_attempt_give_move_move",
+    "noah_learns_no_coordinates_of_another_beings_move",
+    "noah_memory_count_is_4",
     "noah_no_forbidden_substring",
-    "warren_memory_count_is_3",
+    "noah_no_private_sentence",
+    "noah_no_red_lighter",
+    "noah_no_stow_detail",
+    "noah_no_utterance_field",
+    "noah_objects_are_all_something",
+    "warren_memory_count_is_4",
     "warren_no_stow_detail",
     "warren_not_omniscient",
 }

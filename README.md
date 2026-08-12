@@ -267,6 +267,48 @@ one. Invalid responses leave no trace at all, so nobody can perceive a failed
 attempt to answer. Refusal carries no reason and no model infers one. Raw SQL
 remains outside the API boundary.
 
+## v0.6: movement is world history
+
+Objects could not change hands without a cause, but inhabitants could still
+cross the room silently. Position decides what someone can see, hear and be
+occluded from, so a pose change with no cause is a silent change to everyone's
+future perception.
+
+`set_pose` is gone. Two narrower primitives replace it:
+
+```
+seed_pose(...)   INSERT only -- initialization. Raises if already placed, so
+                 seeding cannot be reused as a teleport API.
+_move_pose(...)  UPDATE only -- cannot create a pose; the MOVE action is its
+                 sole caller.
+```
+
+`propose_move(actor, to_x_cm, to_y_cm, facing_x, facing_y)` validates that the
+actor exists and is placed, the facing vector is non-zero, and the destination
+differs from the current pose. **A pure rotation is a real move**: orientation
+already changes what someone will perceive next.
+
+**Temporal semantics, chosen rather than left to statement order.** The MOVE
+event happens **at the departure**. Its position is the FROM position, and the
+event-time snapshot records the world immediately *before* the transition, so
+observers perceive the mover where they set off. The pose updates only after
+the event and its snapshots are written. This is the reverse of GIVE, and
+deliberately: an object's location is not a sensing input, so a transfer may
+move state first — but an actor's **pose is the sensing input**, and changing
+it first would make the mover appear already arrived to everyone watching.
+
+**Perception.** CLEAR gives `{actor, from, to, facing}`; COARSE gives only
+`{actor, moved}`. Exact coordinates are canonical detail a distant observer did
+not receive, so they are destroyed at write rather than stored and filtered.
+The mover knows their own movement by agency, not vision.
+
+**Accepted v0.6 limitations.** A move is discrete: no path, duration, speed,
+collision, or reachability, so nothing prevents crossing a wall or covering a
+kilometre in one action. Walls block sight, never movement. Coarse observers
+learn *that* someone moved, with no direction or distance — there is no fuzzy
+position estimate. Initialization is enforced by `seed_pose` being insert-only,
+which is an API-level boundary, not a lifecycle state machine.
+
 ## Accepted v0.1 limitation: an unprojectable event wedges the queue
 
 Projection fails closed. If `project()` raises for a committed event — an

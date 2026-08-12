@@ -51,7 +51,7 @@ def fresh(tmp_path, holder="warren"):
     world = WorldStore(wc)
     seed_world(world, holder=holder)
     for being_id, pose in GIVE_POSES.items():
-        world.set_pose(being_id, *pose)
+        world.seed_pose(being_id, *pose)
     return world, wc, mc
 
 
@@ -112,7 +112,7 @@ def test_state_changing_kinds_are_exactly_the_guarded_set():
     """v0.5 added two: GIVE_ATTEMPT creates a pending offer, REFUSAL resolves
     one, so both change canonical state and both must be unforgeable."""
     assert STATE_CHANGING_KINDS == frozenset(
-        {"GIVE", "GIVE_ATTEMPT", "STOW", "REFUSAL"})
+        {"GIVE", "GIVE_ATTEMPT", "MOVE", "REFUSAL", "STOW"})
 
 
 def test_no_production_module_calls_the_locked_appender_except_actions():
@@ -372,11 +372,11 @@ def test_full_scenario_state_and_histories(tmp_path):
     # v0.5: the transfer now requires an offer Ava accepts, so the GIVE is
     # preceded by a GIVE_ATTEMPT that everyone present can also perceive.
     assert [e["kind"] for e in world.all_events()] == [
-        "GIVE_ATTEMPT", "GIVE", "SPEECH", "STOW"]
+        "GIVE_ATTEMPT", "GIVE", "SPEECH", "MOVE", "MOVE", "STOW"]
     history = CharacterHistory(mc)
-    assert len(history.recall("ava")) == 4
-    assert len(history.recall("warren")) == 3
-    assert len(history.recall("noah")) == 2
+    assert len(history.recall("ava")) == 5
+    assert len(history.recall("warren")) == 4
+    assert len(history.recall("noah")) == 4
 
 
 def test_state_and_histories_survive_restart(tmp_path):
@@ -387,16 +387,17 @@ def test_state_and_histories_survive_restart(tmp_path):
     assert (loc["holder_id"], loc["stowed_in"]) == ("ava", "jacket pocket")
     seqs = [r[0] for r in conn.execute(
         "SELECT world_seq FROM world_event ORDER BY world_seq")]
-    assert seqs == [0, 1, 2, 3]
+    assert seqs == [0, 1, 2, 3, 4, 5]
     assert conn.execute(
         "SELECT outcome FROM give_attempt").fetchone()[0] == "ACCEPTED"
 
     data = json.loads(run_phase(tmp_path, "recall").stdout)
-    assert len(data["ava"]) == 4
-    assert len(data["warren"]) == 3
-    assert len(data["noah"]) == 2
-    # Noah saw both the offer and the transfer, neither in enough detail.
-    assert [m["content"]["object"] for m in data["noah"]] == ["something", "something"]
+    assert len(data["ava"]) == 5
+    assert len(data["warren"]) == 4
+    assert len(data["noah"]) == 4
+    # Noah saw the offer and the transfer, neither in enough detail.
+    assert [m["content"]["object"] for m in data["noah"]
+            if "object" in m["content"]] == ["something", "something"]
 
 
 # -- information boundary ------------------------------------------------
