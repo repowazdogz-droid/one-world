@@ -138,7 +138,7 @@ def mutant_never_already_perceived(self, character_id, origin_ref):
 
 
 def mutant_record_scan_from_the_departure(self, *, event_id, world_seq,
-                                          being_id):
+                                          being_id, trigger="MOVE"):
     """CONTROL 8 -- PRE-MOVE POSE USED FOR ARRIVAL.
 
     Reuses the MOVE's existing world_pose snapshot instead of reading the pose

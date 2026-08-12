@@ -16,6 +16,18 @@ from one_world import geometry
 
 VISUAL = "VISUAL"
 AUDIO = "AUDIO"
+#: v0.9. The actor knows they did it; nobody else perceives it at all.
+#:
+#: CALIBRATION -- why LOOK is not VISUAL. This model has no physical
+#: manifestation of looking. The only externally visible correlate of where
+#: someone is attending is their FACING, and changing facing is already a MOVE
+#: with its own event and its own perception. Making LOOK visual would mean
+#: inventing eye or head motion that nothing else in the world models, so
+#: bystanders receive NO perception of a LOOK rather than a made-up one.
+#:
+#: This is a deliberately conservative choice and a real limitation, not a
+#: claim that looking is undetectable in principle.
+AGENCY = "AGENCY"
 
 #: Which sense carries which kind of event. Unknown kinds FAIL CLOSED: a new
 #: event kind must declare its modality rather than defaulting to full
@@ -29,6 +41,7 @@ MODALITY = {
     "STOW": VISUAL,
     "SPEECH": AUDIO,
     "REFUSAL": AUDIO,         # saying no out loud; heard, not seen
+    "LOOK": AGENCY,           # v0.9: you know you looked; nobody sees you do it
 }
 
 #: Beyond this, an event is not seen at all.
@@ -134,6 +147,17 @@ def sense_event(
     modality = MODALITY.get(kind)
     if modality is None:
         raise ValueError(f"no sensing rule defined for event kind {kind!r}")
+
+    if modality == AGENCY:
+        # No geometry is consulted, and deliberately so: this is not a claim
+        # that the actor SAW their own action, it is the same self-knowledge
+        # rule _see applies to an actor, with the visual case removed entirely
+        # because there is nothing for anyone else to see.
+        if audio_mode is not None:
+            raise ValueError(f"{kind!r} is silent but carries audio_mode {audio_mode!r}")
+        if actor_id not in poses:
+            raise ValueError(f"actor {actor_id!r} has no event-time pose")
+        return {actor_id: "CLEAR"}
 
     if modality == VISUAL:
         if audio_mode is not None:

@@ -23,8 +23,8 @@ import sys
 
 from one_world import schema
 from one_world.actions import (
-    ACCEPT, attempt_give, propose_move, propose_pickup, propose_place,
-    propose_stow, respond_to_attempt,
+    ACCEPT, attempt_give, propose_look, propose_move, propose_pickup,
+    propose_place, propose_stow, respond_to_attempt,
 )
 from one_world.minds import CharacterHistory
 from one_world.perception import PerceptionRouter
@@ -254,6 +254,35 @@ def setup_arrival_scene(world: WorldStore) -> None:
         world.seed_pose(being_id, *pose)
 
 
+# ---------------------------------------------------------------------------
+# v0.9 scene: Ava never moves, and the lighter appears anyway.
+#
+#            y
+#         0  W(40,0)  [L(100,0)]      A(250,0) facing -x, STATIONARY
+#            .
+#     -3000  N(0,-3000)
+#
+# Ava is seeded at (250,0) AFTER the PLACE has already happened and been
+# projected, so she has no perception of it and -- never having moved -- no
+# arrival scan either. Her history is empty until she chooses to LOOK.
+#
+# The temporal separation is FORCED, not stylistic: a PLACE event happens AT the
+# drop point, so at one instant no geometry can distinguish "could see the
+# placing" from "can see the object lying there". Something must differ between
+# the two moments. Here it is that Ava was not yet in the world.
+# ---------------------------------------------------------------------------
+
+LOOK_WARREN_POSE = (40, 0, 1, 0)
+LOOK_NOAH_POSE = (0, -3000, 0, -1)
+LOOK_AVA_POSE = (250, 0, -1, 0)      # 150 cm from the lighter, looking at it
+
+
+def look_populate_setup(world: WorldStore) -> None:
+    """Warren and Noah exist; the lighter is put down; only then does Ava."""
+    world.seed_pose("warren", *LOOK_WARREN_POSE)
+    world.seed_pose("noah", *LOOK_NOAH_POSE)
+
+
 def world_path(d: str) -> str:
     return os.path.join(d, "world.db")
 
@@ -452,6 +481,52 @@ def arrival_populate(d: str, crash_before_derive: bool) -> None:
     router.derive_pending()
 
 
+def look_populate(d: str, crash_before_derive: bool) -> None:
+    """Place the lighter, seed a stationary Ava, then let her LOOK.
+
+    Ava never moves in this phase. The crash window is the v0.9 one: the LOOK
+    event and its observation snapshot are committed, and not one STATE
+    observation has been written.
+    """
+    world_conn, minds_conn = _open_both(d)
+    world = WorldStore(world_conn)
+    seed_world(world)
+    look_populate_setup(world)
+    router = PerceptionRouter(world, minds_conn)
+
+    placed = propose_place(world, actor="warren", object_id="lighter-1",
+                           x_cm=LIGHTER_LIES_AT[0], y_cm=LIGHTER_LIES_AT[1],
+                           presence=["warren", "noah"], location=ROOM,
+                           occurred_at="0009-01-01T00:00:00Z")
+    if not placed.accepted:
+        raise SystemExit(f"scenario PLACE rejected: {placed.reason}")
+    router.derive_pending()
+
+    # Ava enters the world, already stationary, and stays that way.
+    world.seed_pose("ava", *LOOK_AVA_POSE)
+
+    looked = propose_look(world, actor="ava", presence=ALL_THREE,
+                          location=ROOM, occurred_at="0009-01-01T00:01:00Z")
+    if not looked.accepted:
+        raise SystemExit(f"scenario LOOK rejected: {looked.reason}")
+    if crash_before_derive:
+        # Hard kill. The LOOK and its observation snapshot are committed; no
+        # perception of it exists.
+        os._exit(9)
+    router.derive_pending()
+
+
+def look_again(d: str) -> None:
+    """A second LOOK from the same unmoved pose."""
+    world_conn, minds_conn = _open_both(d)
+    world = WorldStore(world_conn)
+    result = propose_look(world, actor="ava", presence=ALL_THREE,
+                          location=ROOM, occurred_at="0009-01-01T00:03:00Z")
+    if not result.accepted:
+        raise SystemExit(f"scenario LOOK rejected: {result.reason}")
+    PerceptionRouter(world, minds_conn).derive_pending()
+
+
 def arrival_disturb(d: str) -> None:
     """Change the world OUT from under an undelivered scan.
 
@@ -490,7 +565,8 @@ def main(argv: list[str] | None = None) -> int:
         "--phase", required=True,
         choices=["populate", "recover", "recall", "move",
                  "wall-populate", "wall-add", "wall-remove", "wall-event",
-                 "offer", "answer", "arrival-populate", "arrival-disturb"],
+                 "offer", "answer", "arrival-populate", "arrival-disturb",
+                 "look-populate", "look-again"],
     )
     ap.add_argument("--response", choices=["ACCEPT", "REFUSE"], default="REFUSE")
     ap.add_argument("--attempt", default=None)
@@ -507,6 +583,10 @@ def main(argv: list[str] | None = None) -> int:
         arrival_populate(args.dir, args.crash_before_derive is not None)
     elif args.phase == "arrival-disturb":
         arrival_disturb(args.dir)
+    elif args.phase == "look-populate":
+        look_populate(args.dir, args.crash_before_derive is not None)
+    elif args.phase == "look-again":
+        look_again(args.dir)
     elif args.phase == "wall-populate":
         wall_populate(args.dir, args.wall == "yes", args.crash_before_derive)
     elif args.phase in ("wall-add", "wall-remove"):

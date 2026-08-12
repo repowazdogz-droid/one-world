@@ -358,6 +358,83 @@ def propose_move(
             event_id=event_id,
             world_seq=int(event_id.split("-")[1]),
             being_id=actor,
+            trigger="MOVE",
+        )
+    return ActionResult(accepted=True, event_id=event_id)
+
+
+# ---------------------------------------------------------------------------
+# v0.9: looking is a thing you choose to do.
+#
+# v0.8 could only sense present state on arrival, so a stationary inhabitant was
+# permanently ignorant of anything that appeared in front of them. Movement and
+# observation were the same act. This separates them.
+# ---------------------------------------------------------------------------
+
+
+def propose_look(
+    world: WorldStore,
+    *,
+    actor: str,
+    presence: list[str],
+    location: str,
+    occurred_at: str,
+) -> ActionResult:
+    """Observe the world from where you already stand.
+
+    Preconditions are only that the actor exists and is placed. There is no
+    NO_CHANGE rule: looking twice at an unchanged world is two real experiences,
+    not a repeated one, and the world does not decide that a second look was
+    pointless.
+
+    LOOK CHANGES NO PHYSICAL STATE. It does not move the actor, does not turn
+    them, does not touch any object, and does not build or remove anything. That
+    is not merely a convention of this function -- it holds no pose primitive
+    and no object primitive, so there is nothing here that could. Facing is
+    taken as it already is; an inhabitant who wants to inspect another direction
+    rotates with a MOVE first, because rotation is already movement and v0.9
+    does not fuse the two.
+
+    What it DOES produce:
+
+        a canonical LOOK event ....... "Ava looked." World truth.
+        an observation scan .......... snapshotted from her CURRENT pose.
+        STATE observations ........... "Ava saw a red lighter." HER truth.
+
+    The second and third are not the same thing, and the third never enters
+    canonical history. Nothing anywhere records that the world contains the fact
+    "Ava saw a red lighter"; it records that she looked, and her own memory
+    holds what that got her.
+
+    The LOOK event is AGENCY-sensed: the actor knows they looked, and no
+    bystander perceives it, because this world models no physical manifestation
+    of looking beyond facing -- and facing changes are MOVE.
+    """
+    with world.transaction():
+        if not world.being_exists(actor):
+            return _rejected(UNKNOWN_ACTOR)
+        try:
+            ax, ay, _, _ = world.current_pose(actor)
+        except KeyError:
+            return _rejected(NOT_PLACED)
+
+        event_id = world._append_event_locked(
+            kind="LOOK",
+            location=location,
+            actor_id=actor,
+            payload={"actor": actor},
+            presence=presence,
+            event_x_cm=ax,
+            event_y_cm=ay,
+            occurred_at=occurred_at,
+        )
+        # From where she already is. No transition preceded this, and none
+        # follows it.
+        world._record_arrival_scan(
+            event_id=event_id,
+            world_seq=int(event_id.split("-")[1]),
+            being_id=actor,
+            trigger="LOOK",
         )
     return ActionResult(accepted=True, event_id=event_id)
 

@@ -87,6 +87,13 @@ def _stow_clear(p: dict) -> dict:
     return {"actor": p["actor"], "object": p["object"], "place": p["place"]}
 
 
+def _look_clear(p: dict) -> dict:
+    # v0.9. The AGENCY record of having looked, and nothing else. It carries no
+    # result: what the look yielded arrives separately as STATE sightings, so a
+    # LOOK memory can never be mistaken for a memory of what was seen.
+    return {"actor": p["actor"]}
+
+
 def _sighting_clear(p: dict) -> dict:
     # "I can see a red lighter lying at (100, 0)." Note what is NOT here: no
     # actor, no cause, no history. Seeing a thing tells you it is there, not how
@@ -115,6 +122,11 @@ _PROJECTIONS: dict[tuple[str, str], Callable[[dict], dict]] = {
     ("PLACE", "COARSE"): _place_coarse,
     ("PICKUP", "CLEAR"): _pickup_clear,
     ("PICKUP", "COARSE"): _pickup_coarse,
+    # v0.9. CLEAR only, and that is not an omission: LOOK is AGENCY-sensed, so
+    # the actor is the only being who ever receives one and there is no
+    # degraded-distance case to define. A COARSE LOOK would mean a bystander
+    # half-perceived someone looking, which this world does not model.
+    ("LOOK", "CLEAR"): _look_clear,
     # v0.8: not an event kind. SIGHTING is the reduction of PRESENT STATE, and
     # it goes through the same fail-closed dispatch as everything else.
     ("SIGHTING", "CLEAR"): _sighting_clear,

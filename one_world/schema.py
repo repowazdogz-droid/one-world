@@ -214,16 +214,37 @@ BEGIN SELECT RAISE(ABORT, 'world_observation is append-only'); END;
 -- needs the pose AFTER the transition, which no existing table holds, so it
 -- gets its own row rather than a reinterpretation of an existing one.
 --
--- One scan per successful MOVE: world_seq and event_id are the MOVE's own, so
--- an arrival is anchored to the canonical history that caused it and needs no
--- clock of its own. A scan row exists even when nothing was visible -- "Noah
--- arrived and saw nothing" is a historical fact, not an absence of one.
+-- One scan per triggering event: world_seq and event_id are that event's own,
+-- so an observation is anchored to the canonical history that caused it and
+-- needs no clock of its own. A scan row exists even when nothing was visible --
+-- "Noah looked and saw nothing" is a historical fact, not an absence of one.
+--
+-- v0.9 -- THE NAME IS HISTORICAL. This is the generic OBSERVATION-SCAN table.
+-- It was introduced in v0.8 when a MOVE arrival was the only way to sense
+-- present state, and it keeps that name deliberately rather than being renamed
+-- across the suite for tidiness. `trigger` is what distinguishes the two, and
+-- the distinction is semantic, not cosmetic:
+--
+--   trigger='MOVE'   ARRIVAL observation, from the POST-MOVE pose. The caller
+--                    must have applied the pose transition first.
+--   trigger='LOOK'   INTENTIONAL observation, from the actor's CURRENT pose,
+--                    which LOOK does not and cannot change.
+--
+-- Both record the observer's pose AT THE MOMENT THE SCAN WAS TAKEN, which is
+-- why one column set serves both. Neither may be derived from world_pose: for
+-- a MOVE that snapshot is the departure, and for a LOOK it is the pose the
+-- actor happened to hold at some earlier event.
+--
+-- DEFAULT 'MOVE' is for pre-v0.9 raw inserts only; every production write
+-- passes `trigger` explicitly.
 CREATE TABLE IF NOT EXISTS arrival_scan (
     scan_id    TEXT PRIMARY KEY,
     world_seq  INTEGER NOT NULL UNIQUE,
     event_id   TEXT NOT NULL UNIQUE REFERENCES world_event(event_id),
     being_id   TEXT NOT NULL REFERENCES being(being_id),
-    x_cm       INTEGER NOT NULL,          -- ARRIVAL pose, not departure
+    trigger    TEXT NOT NULL DEFAULT 'MOVE'
+               CHECK (trigger IN ('MOVE', 'LOOK')),
+    x_cm       INTEGER NOT NULL,          -- pose AT SCAN TIME
     y_cm       INTEGER NOT NULL,
     facing_x   INTEGER NOT NULL,
     facing_y   INTEGER NOT NULL,

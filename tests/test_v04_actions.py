@@ -115,9 +115,18 @@ def test_commit_event_refuses_state_changing_kinds(tmp_path):
 
 def test_state_changing_kinds_are_exactly_the_guarded_set():
     """v0.5 added two: GIVE_ATTEMPT creates a pending offer, REFUSAL resolves
-    one, so both change canonical state and both must be unforgeable."""
+    one, so both change canonical state and both must be unforgeable.
+
+    v0.9 added LOOK, which changes no PHYSICAL state and is guarded for the
+    other half of what this set means. A LOOK asserts an inhabitant really
+    performed an observation and carries a canonical observation scan with it,
+    so a forged one would either write "Ava looked" into history when she did
+    not, or produce a LOOK event with no scan behind it -- a canonical claim
+    about an observation that never happened.
+    """
     assert STATE_CHANGING_KINDS == frozenset(
-        {"GIVE", "GIVE_ATTEMPT", "MOVE", "PICKUP", "PLACE", "REFUSAL", "STOW"})
+        {"GIVE", "GIVE_ATTEMPT", "LOOK", "MOVE", "PICKUP", "PLACE", "REFUSAL",
+         "STOW"})
 
 
 def test_no_production_module_calls_the_locked_appender_except_actions():

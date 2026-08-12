@@ -17,8 +17,16 @@ from one_world.sensing import sense_event, sense_state
 #: the validated action layer (one_world.actions), never by a direct call to
 #: commit_event -- otherwise the action layer would be a well-behaved caller
 #: alongside an open back door, rather than the only way in.
+#:
+#: v0.9 adds LOOK, which changes no PHYSICAL state at all. It is guarded for the
+#: other half of what this set means: a LOOK asserts that an inhabitant really
+#: performed an observation, and it carries a canonical observation scan. A
+#: forged LOOK would either write "Ava looked" into history when she did not, or
+#: -- worse -- produce a LOOK event with no scan behind it, which is a canonical
+#: claim about an observation that never happened.
 STATE_CHANGING_KINDS = frozenset(
-    {"GIVE", "GIVE_ATTEMPT", "MOVE", "PICKUP", "PLACE", "REFUSAL", "STOW"}
+    {"GIVE", "GIVE_ATTEMPT", "LOOK", "MOVE", "PICKUP", "PLACE", "REFUSAL",
+     "STOW"}
 )
 
 
@@ -406,48 +414,60 @@ class WorldStore:
     # -- v0.8: arrival-state sensing -------------------------------------
 
     def _record_arrival_scan(self, *, event_id: str, world_seq: int,
-                             being_id: str) -> str:
-        """Sense what is PRESENT from the pose a MOVE just arrived at.
+                             being_id: str, trigger: str = "MOVE") -> str:
+        """Sense what is PRESENT from the observer's pose RIGHT NOW.
 
-        The caller MUST already hold the action transaction, and MUST already
-        have applied the pose transition. Both halves matter:
+        The generic observation scan. v0.8 introduced it with a MOVE arrival as
+        its only trigger, which is why it still carries the arrival name; v0.9
+        added LOOK. The body was already trigger-agnostic -- it reads
+        `current_pose`, meaning "wherever the observer is at the instant this
+        scan is taken" -- so LOOK needed no second copy of the sensing,
+        snapshotting or recovery machinery.
 
-          * Same transaction, so a committed MOVE always leaves behind the
-            durable, authoritative inputs its arrival scan was computed from.
-            There is no window in which the world says Ava arrived but has
-            forgotten what she arrived to.
+        The caller MUST already hold the action transaction, so a committed
+        trigger event always leaves behind the durable, authoritative inputs its
+        scan was computed from. There is no window in which the world says Ava
+        looked but has forgotten what she saw.
 
-          * AFTER the transition, because the pose this reads is the ARRIVAL
-            pose. It comes from current_pose -- the canonical present, which the
-            caller has just updated -- and NOT from the MOVE's world_pose
-            snapshot, which by design records the departure. Reusing world_pose
-            here would look tidy and be temporally wrong.
+        WHAT THE TRIGGERS MEAN, and why one pose column serves both:
+
+          trigger='MOVE'  the caller MUST have applied the pose transition
+                          first, because the pose wanted is the ARRIVAL pose.
+          trigger='LOOK'  the caller MUST NOT have touched the pose at all,
+                          because the pose wanted is where the actor already is.
+
+        In both cases this is the pose AT SCAN TIME, read from canonical
+        present state. Neither may come from `world_pose`: for a MOVE that
+        snapshot is the DEPARTURE by design, and for a LOOK it is whatever pose
+        the actor held at some earlier event. Reusing it would look tidy and be
+        temporally wrong in two different ways.
 
         Object positions, descriptions and grades are SNAPSHOTTED into
         arrival_sighting rather than left to be looked up when the perceptions
         are eventually projected. That is what makes a delayed or retried
-        projection reproduce the observation an uninterrupted MOVE would have
+        projection reproduce the observation an uninterrupted run would have
         produced, however much the world has moved on in the meantime.
 
-        A scan row is written even when nothing was visible: arriving and seeing
+        A scan row is written even when nothing was visible: looking and seeing
         nothing is a fact, and a later scan must not be able to fill it in.
 
-        ORDERING: the scan takes the MOVE's OWN world_seq rather than consuming
-        a new one. A scan is not an event -- appending "Ava looked" to canonical
-        history would make an inhabitant's perception into world truth, which is
-        precisely the distinction this project exists to keep -- and burning
-        event sequence numbers on non-events would leave holes in a log whose
-        density is a v0.1 invariant. The MOVE is the canonical fact; the scan
-        hangs off it, and the drain breaks the tie by putting the event first.
+        ORDERING: the scan takes the TRIGGER EVENT'S OWN world_seq rather than
+        consuming a new one. A scan is not an event -- "Ava saw a red lighter"
+        must never become world truth, which is precisely the distinction this
+        project exists to keep -- and burning event sequence numbers on
+        non-events would leave holes in a log whose density is a v0.1 invariant.
+        The MOVE or LOOK is the canonical fact; the scan hangs off it, and the
+        drain breaks the tie by putting the event first.
         """
         seq = world_seq
         scan_id = f"scan-{seq:06d}"  # deterministic; no UUID anywhere
-        pose = self.current_pose(being_id)     # ARRIVAL pose, post-transition
+        pose = self.current_pose(being_id)     # pose AT SCAN TIME
         self._conn.execute(
             "INSERT INTO arrival_scan "
-            "(scan_id, world_seq, event_id, being_id, x_cm, y_cm, facing_x, facing_y) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (scan_id, seq, event_id, being_id, *pose),
+            "(scan_id, world_seq, event_id, being_id, trigger, "
+            "x_cm, y_cm, facing_x, facing_y) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (scan_id, seq, event_id, being_id, trigger, *pose),
         )
 
         placed = self.placed_objects()
@@ -525,6 +545,7 @@ class WorldStore:
             "world_seq": row["world_seq"],
             "event_id": row["event_id"],
             "being_id": row["being_id"],
+            "trigger": row["trigger"],
             "pose": (row["x_cm"], row["y_cm"], row["facing_x"], row["facing_y"]),
             "sightings": sightings,
         }

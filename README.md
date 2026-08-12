@@ -433,6 +433,79 @@ which emits only `EVENT` or `STATE` — but that is code-level, not schema-level
 and a raw INSERT into a migrated store could write a third value. Rebuilding the
 table to attach the constraint is deliberately deferred, not overlooked.
 
+## v0.9: LOOK — observing without moving
+
+v0.8's only trigger for state perception was a successful MOVE, so movement and
+observation were the same act. Ava could stand still while Warren put a lighter
+down in front of her and remain ignorant of it forever, unless she walked
+somewhere. That was the largest artificial feature left in the epistemic model.
+
+**LOOK** is the smallest intentional observation action:
+
+```python
+propose_look(world, actor="ava", presence=..., location=..., occurred_at=...)
+```
+
+Preconditions are only that the actor exists and is placed. There is no
+NO_CHANGE rule — looking twice at an unchanged world is two real experiences,
+and the world does not rule that the second was pointless.
+
+**LOOK changes no physical state.** Not by convention: `propose_look` holds no
+pose primitive and no object primitive, so there is nothing in it that could
+move anything. Facing is taken as it already is. An inhabitant who wants to
+inspect another direction rotates with a MOVE first — rotation is already
+movement, and v0.9 does not fuse the two.
+
+**Three things, kept apart.**
+
+```
+canonical LOOK event ..... "Ava looked."              world truth
+observation scan ......... snapshotted from her pose  world truth
+STATE sightings .......... "Ava saw a red lighter."   HER truth, never the world's
+```
+
+Canonical history records that she looked. It never records what she saw.
+
+**LOOK is AGENCY-sensed.** The actor knows they looked; no bystander perceives
+it. This world models no physical manifestation of looking beyond facing, and
+facing changes are already MOVE — so rather than invent eye or head motion that
+nothing else models, bystanders receive nothing. Conservative, and a real
+limitation rather than a claim that looking is undetectable in principle.
+
+**One scan mechanism, two triggers.** v0.9 did not build a parallel LOOK scan.
+The v0.8 machinery was already trigger-agnostic — it reads `current_pose`,
+meaning "wherever the observer is when the scan is taken" — so LOOK needed no
+second copy of the sensing, snapshotting or recovery code. A `trigger` column
+keeps the semantics distinct:
+
+```
+trigger='MOVE'   ARRIVAL observation, from the POST-MOVE pose
+trigger='LOOK'   INTENTIONAL observation, from the CURRENT pose
+```
+
+Both record the pose at scan time. Neither may come from `world_pose`: for a
+MOVE that snapshot is the departure by design, and for a LOOK it is whatever
+pose the actor held at some earlier event. The table is still called
+`arrival_scan` — a historical name, kept deliberately rather than renamed across
+the suite for tidiness.
+
+Everything else is inherited unchanged: the same `_visual_grade`, so a LOOK and
+an arrival from the same pose in the same world see exactly the same thing;
+LOOK-time positions, descriptions and grades snapshotted so delayed recovery
+cannot substitute today's world; identity keyed on the observation so repeated
+looks are distinct memories while a replay is not; and one explicit
+per-character order, with a LOOK event always remembered before what it
+revealed.
+
+**Accepted v0.9 limitations.** Observation is still discrete and deliberate:
+there is no continuous sensing, no tick, no autonomous looking, and an object
+placed in front of a standing character goes unnoticed until they choose to
+look. LOOK sees only currently placed objects — no people, held objects,
+containers or structure. Direction cannot be chosen independently of facing.
+Nobody can perceive that someone else is looking, so there is no gaze, no
+attention, and no being watched. There is still no object permanence, belief
+revision or forgetting: two looks at one lighter are two unreconciled memories.
+
 ## Accepted v0.1 limitation: an unprojectable event wedges the queue
 
 Projection fails closed. If `project()` raises for a committed event — an
