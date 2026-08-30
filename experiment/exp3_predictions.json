@@ -1,0 +1,20 @@
+{
+ "S": {
+  "POLICY/OFF": "SUCCESS",
+  "POLICY/ON": "SUCCESS",
+  "LLM/OFF": "SUCCESS",
+  "LLM/ON": "SUCCESS"
+ },
+ "T-near": {
+  "POLICY/OFF": "FIXED",
+  "POLICY/ON": "FIXED",
+  "LLM/OFF": "FIXED",
+  "LLM/ON": "ESCAPE<=t4"
+ },
+ "T-far": {
+  "POLICY/OFF": "FIXED",
+  "POLICY/ON": "FIXED",
+  "LLM/OFF": "FIXED",
+  "LLM/ON": "FIXED (exploratory)"
+ }
+}
