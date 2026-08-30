@@ -124,3 +124,118 @@ Experiment 3 was built to draw, and it was drawn by a falsifier rather than by m
 
 **No cell was reclassified.** The frozen classes in §5 stand as written, and every result is
 reported against them.
+
+---
+
+## ID3 — Instrument defect: the floor check measured PERCEPTION, not POSSESSION
+
+**Found by:** tracing the confirmatory T-near cells after the gemini conditions completed 0/6
+in both arms, against a §6 prediction of "ESCAPE by turn 4" under `ON`.
+
+**What the traces show.** The agent was not failing to reason. In `90deg/d=100` under `ON`, the
+model turned to face `[0, 1]` — exactly the object's true bearing — and its `TAKE` was still
+`REJECTED OUT_OF_REACH`.
+
+**Cause.** `DETAIL_RANGE_CM = 300` but `INTERACTION_RANGE_CM = 80`. An object 100 cm away is
+perceived CLEAR and cannot be picked up. The §5 floor check scored a cell "escapable" when a
+rotation produced a **CLEAR sighting**. That is the wrong endpoint: the task's success criterion
+is possession, and reaching it requires rotate → perceive → **approach** → take, which is at
+minimum one turn more than the floor check counted, and the perception only lands at the end of
+the turn in which the rotation happened.
+
+**Consequence for the frozen prediction.** "ESCAPE by turn 4" assumed a route the floor check
+never validated. With four cardinal facings, no information about which is correct, one turn
+spent travelling to the remembered point, and an approach move required after the sighting, a
+5-turn budget leaves almost no margin for an uninformed sweep. The T-near prediction was
+therefore over-confident by construction.
+
+**Verdict recorded for the T-near class: DISAGREEMENT with an identified cause, and the cause is
+in the apparatus, not the subject.** The class is not reported as evidence that models cannot
+escape. It is reported as a cell class whose escape route was never validated to the task's own
+success criterion.
+
+**What survived, and it is the useful half.** The behavioural measure is unaffected by the
+budget defect, because it asks a different question — did the agent ever orient toward the
+object at all:
+
+| condition | oriented toward the object (6 T-near reps) | converted to possession |
+|---|---|---|
+| `LLM/OFF` | **0 / 6** | 0 |
+| `LLM/ON` | **2 / 6**, both at turn 5 | 0 |
+
+Under `OFF` the agent never once turned toward the object across six independent runs. Under
+`ON` it did, twice, on the final turn of the budget. The feedback channel changed the agent's
+behaviour in the predicted direction and ran out of turns before that behaviour could become an
+outcome.
+
+**Fix at the class level, for any successor run:** a floor check must score the experiment's own
+success criterion, not a proxy for it. Concretely, score reachability by simulating
+rotate → perceive → approach → take, and set the turn budget from the worst-case ordering of an
+uninformed sweep rather than from the lucky one. **Not applied here.** The frozen design stands
+and this run is reported against it.
+
+---
+
+## CF1 — CONFOUNDED: the POLICY-vs-LLM comparison on S cells
+
+**Status: CONFOUNDED. This comparison licenses no claim and is not pooled.**
+
+**What I was about to report.** That frontier models under-perform a trivial scripted policy on
+the six S cells — policy 6/6, gemini `OFF` 6/18 = 0.333, gpt-5-mini `OFF` 13/18 = 0.722. It is
+a striking sentence and it is not a sound one.
+
+**The second available cause the design did not exclude.** `experiment/policy.py` hardcodes
+`FACING = (1, 0)` as an authored constant. Recomputed from `one_world.geometry.in_facing_cone`:
+
+| cells | B inside the cone from A when facing (1,0)? |
+|---|---|
+| all six **S** cells | **True** |
+| 0deg and 45deg **T-far** cells | True (blocked by distance, not bearing) |
+| both **T-near** cells, and 90deg/180deg T-far | False |
+
+The policy is **pre-aimed**. In every S cell its constant facing points at the object's new
+location, so its arrival scan returns a CLEAR sighting and its next turn succeeds. The language
+model is given no information about which of four facings is correct and picks one arbitrarily;
+in the failure traces it chose `[0, -1]`, its arrival scan returned nothing, and under `OFF` it
+then repeated `TAKE` identically to the end of the budget.
+
+So the two agents were not solving the same problem. One had the answer compiled into it.
+
+**What this means for Experiment 2, stated carefully.** Experiment 2's 6 successes are still
+exactly what its own registration predicted, and its 14/14 match stands unaffected. What cannot
+be read out of it is any notion that the policy displays search competence: on this matrix its
+successes are the product of an authored constant aligned with the cell geometry. That is a
+limit on interpretation, not an error in that experiment.
+
+**What survives the confound, and why.** The `OFF` vs `ON` comparison **within** the LLM arm is
+unaffected: both arms use the same prompt, the same action vocabulary, the same absence of any
+hint about facing, and the same budget, and differ only in whether the environment reports the
+outcome of the previous action. Every feedback-channel number in the report is a within-LLM
+comparison for exactly this reason. The T-near behavioural measure (orientation toward the
+object, 0/6 under `OFF` versus 2/6 under `ON`) is likewise a within-LLM contrast.
+
+**Caught by:** suspecting the harness before the subject, after the S-cell result came out in a
+direction too convenient to be trusted.
+
+---
+
+## ID4 — Instrumentation gap: the trace does not carry per-turn perceptions
+
+**Found by:** needing to verify the single T-near escape. `experiment/exp2.py::run_turns` records
+`new_event_perceptions` and `new_state_perceptions` for every turn; my
+`experiment/exp3.py::run_cell` records the proposal, the per-action result, the truncated raw
+model text and the holder, but **not** the perceptions the environment delivered.
+
+**Consequence.** The JSON artefacts alone do not let a reader reconstruct the classification
+independently of the classifier, which is the standard this experiment is supposed to meet. The
+verification of the escape chain required opening `minds.db` directly.
+
+**Not a result defect.** The underlying databases are retained per cell, per condition, per
+repeat, so every trace remains independently reconstructible from disk — it is one step less
+convenient, not one step less checkable. The escape was verified this way:
+`perception_seq 1` carries the stale `SIGHTING CLEAR {"at":[0,0]}`; the turn-4 reorientation
+emits `evt-000008`; `perception_seq 6` carries `SIGHTING CLEAR {"at":[-100,0]}` with
+`origin_ref sig-000008-000`; the turn-5 move consumes it; `object_location.holder_id = 'ava'`.
+
+**Fix for any successor run:** record new perceptions per turn, as Experiment 2 did. **Not
+applied here** — the frozen design stands and this run is reported against it.

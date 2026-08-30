@@ -24,6 +24,38 @@ def wilson(k, n, z=1.96):
     return (p, max(0.0, c - h), min(1.0, c + h))
 
 
+def _logfact(n, _c={0: 0.0}):
+    if n not in _c:
+        v = _c[max(_c)]
+        for i in range(max(_c) + 1, n + 1):
+            v += math.log(i)
+            _c[i] = v
+    return _c[n]
+
+
+def fisher(a, b, c, d):
+    """Two-sided Fisher exact on [[a,b],[c,d]]."""
+    n = a + b + c + d
+    if n == 0:
+        return 1.0
+
+    def p_tab(a_):
+        b_, c_, d_ = a + b - a_, a + c - a_, d - a + a_
+        if min(b_, c_, d_) < 0:
+            return 0.0
+        return math.exp(_logfact(a + b) + _logfact(c + d) + _logfact(a + c)
+                        + _logfact(b + d) - _logfact(n) - _logfact(a_)
+                        - _logfact(b_) - _logfact(c_) - _logfact(d_))
+
+    obs = p_tab(a)
+    tot = 0.0
+    for a_ in range(0, min(a + b, a + c) + 1):
+        pt = p_tab(a_)
+        if pt <= obs * (1 + 1e-9):
+            tot += pt
+    return min(1.0, tot)
+
+
 def fmt(k, n):
     p, lo, hi = wilson(k, n)
     return f"{k}/{n} = {p:.3f} [{lo:.3f}, {hi:.3f}]"
@@ -97,6 +129,21 @@ def main():
                    for r in v[a] for t in r["turns"]
                    if t["status"].startswith("transport"))
         print(f"| `{agent}/{model}/{fb}` | {n} | {mal} | {terr} |")
+
+    print("\n## 4b. Feedback channel: OFF vs ON within model, by cell class\n")
+    print("| model | class | OFF | ON | difference | Fisher p |")
+    print("|---|---|---|---|---|---|")
+    models = sorted({m for (_a, m, _f) in table})
+    for m in models:
+        for c in ORDER:
+            off = table.get(("LLM", m, "OFF"), {}).get(c)
+            on = table.get(("LLM", m, "ON"), {}).get(c)
+            if not off or not on:
+                continue
+            p_ = fisher(off[0], off[1] - off[0], on[0], on[1] - on[0])
+            diff = on[0] / on[1] - off[0] / off[1] if off[1] and on[1] else 0
+            print(f"| `{m}` | {c} | {fmt(*off)} | {fmt(*on)} | "
+                  f"{diff:+.3f} | {p_:.4g} |")
 
     print("\n## 5. Falsifier 1 — any escape in T-far\n")
     hits = []
