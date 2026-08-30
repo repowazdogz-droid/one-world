@@ -1,8 +1,36 @@
-# ONE WORLD — v0.1
+# ONE WORLD
 
 A persistent world inhabited by humans and AI characters.
 
 > There is one reality, but nobody automatically sees all of it.
+
+## Where to start
+
+The world engine is documented below, milestone by milestone (v0.1 through v0.4). Three
+experiments have been run in it. Each was preregistered in its own commit, before the run.
+
+| | |
+|---|---|
+| **Experiment 1** | [`PREREGISTRATION.md`](PREREGISTRATION.md), [`EXPERIMENT_REPORT.md`](EXPERIMENT_REPORT.md). First inhabitant, history to action. Pins `experiment/policy.py`, which every later experiment reuses verbatim. |
+| **Experiment 2** | [`PREREGISTRATION_EXP2.md`](PREREGISTRATION_EXP2.md), [`EXPERIMENT_2_REPORT.md`](EXPERIMENT_2_REPORT.md). The stale-information fixed point. 28 worlds, 14 cells by 2 arms. **14 of 14 cells matched prediction, all 8 controls passed.** Agent is the pinned scripted policy. |
+| **Experiment 3** | [`PREREGISTRATION_EXP3.md`](PREREGISTRATION_EXP3.md), [`EXPERIMENT_3_REPORT.md`](EXPERIMENT_3_REPORT.md), [`DEVIATIONS_EXP3.md`](DEVIATIONS_EXP3.md). Language models in the same world. **Verdict: DISAGREEMENT.** |
+
+**Experiment 3 in one paragraph.** The one manipulated variable is whether the environment returns
+the outcome of a rejected action. Across three models and eighteen runs, no agent escaped the fixed
+point when that outcome was withheld; with it returned, 6 of 18 escaped (Fisher p = 0.019). The
+preregistered criterion required the effect to hold across two model families and **it did not**:
+one model carries almost all of it and the second vendor's model never escaped. The supported claim
+is that the observation contract was necessary and not sufficient. One preregistered falsifier
+fired. Read [`DEVIATIONS_EXP3.md`](DEVIATIONS_EXP3.md) before the result: it records four apparatus
+faults and one confound, two of which would independently have manufactured the predicted result.
+
+**Chronology is checkable from git.** Each preregistration is a commit containing that file and
+nothing else, made before the corresponding run. `experiment/policy.py` was committed at `4cb6493`
+on 2026-08-13 and is byte-identical at HEAD, so it could not have been tuned to any later result.
+
+**How results are checked.** Outcomes are read from canonical world state, never from an agent's
+own account. Experiment 3's scorer reads `object_location`; the per-cell `world.db` and `minds.db`
+are retained so any trace can be reconstructed independently.
 
 The system keeps three things apart:
 
@@ -532,6 +560,10 @@ python3 -m one_world.scenario --dir /tmp/w --phase recover
 ```
 
 ## Not in v0.1
+
+*(Scope note as written at the v0.1 milestone. Experiment 3 later added a language-model agent
+under the same boundary: it receives only persisted perceptions and proposes actions, and it is
+never the authority on what historically happened. See `experiment/agent_llm.py`.)*
 
 No LLMs, Unreal, VR, mocap, voice, autonomous agents, vector databases, or
 formal methods. An LLM may eventually interpret perceptions and propose
